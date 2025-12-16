@@ -667,8 +667,8 @@ export const Feed: React.FC = () => {
                          <div className="flex items-center gap-1">
                            <p className="font-bold text-sm text-dark">{review.user?.username}</p>
                            {review.user?.is_verified && (
-                             <span className="material-symbols-outlined text-primary text-[14px] filled">verified</span>
-                           )}
+  <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
+)}
                          </div>
                          <p className="text-xs text-gray-500 flex items-center gap-1">
                            {review.restaurant?.name} 

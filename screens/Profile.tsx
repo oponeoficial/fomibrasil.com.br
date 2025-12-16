@@ -726,7 +726,12 @@ export const Profile: React.FC = () => {
                  </div>
                </div>
                
-               <h1 className="text-2xl font-bold mb-1 text-center">{profileUser.full_name}</h1>
+               <div className="flex items-center gap-2 mb-1">
+  <h1 className="text-2xl font-bold text-center">{profileUser.full_name}</h1>
+  {profileUser.is_verified && (
+    <img src="/selo-verificado.png" alt="Verificado" className="size-5" />
+  )}
+</div>
                {(profileUser.city || profileUser.neighborhood) && (
                  <p className="text-xs text-gray-500 mb-5 flex items-center gap-1">
                     <span className="material-symbols-outlined text-[14px]">location_on</span>

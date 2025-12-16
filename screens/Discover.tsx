@@ -613,7 +613,9 @@ export const Discover: React.FC = () => {
                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
                              <span className="font-bold text-dark truncate">{user.full_name}</span>
-                             {user.is_verified && <span className="material-symbols-outlined text-primary text-sm filled">verified</span>}
+                             {user.is_verified && (
+  <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
+)}
                           </div>
                           <p className="text-sm text-gray-500 truncate">@{user.username}</p>
                           <p className="text-xs text-gray-400 mt-1">
