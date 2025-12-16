@@ -6,8 +6,9 @@ import { useAppContext } from '../AppContext';
 
 export const Onboarding: React.FC = () => {
   const navigate = useNavigate();
-  const { setUserPreferences } = useAppContext();
+  const { setUserPreferences, currentUser } = useAppContext();
   const [step, setStep] = useState<OnboardingStep>(OnboardingStep.DISLIKES);
+  const [saving, setSaving] = useState(false);
   
   // -- State --
   // Step 1
@@ -34,9 +35,8 @@ export const Onboarding: React.FC = () => {
 
   // -- Actions --
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === OnboardingStep.DISLIKES) {
-      // No validation needed for Step 1 (0 to N)
       setStep(OnboardingStep.OCCASIONS);
       window.scrollTo(0, 0);
     } 
@@ -53,15 +53,21 @@ export const Onboarding: React.FC = () => {
       window.scrollTo(0, 0);
     } 
     else if (step === OnboardingStep.RESTRICTIONS) {
-      // Save all preferences to Context
-      setUserPreferences({
-        dislikes,
-        occasions,
-        radar,
-        restrictions
-      });
-      // Mark onboarding_completed = true (implicit by navigating)
-      navigate('/feed');
+      setSaving(true);
+      try {
+        await setUserPreferences({
+          dislikes,
+          occasions,
+          radar,
+          restrictions
+        });
+        navigate('/feed');
+      } catch (error) {
+        console.error('Erro ao salvar preferências:', error);
+        alert('Erro ao salvar. Tente novamente.');
+      } finally {
+        setSaving(false);
+      }
     }
   };
 
@@ -91,7 +97,7 @@ export const Onboarding: React.FC = () => {
     } else {
       if (occasions.length >= 5) {
         setOccasionError("Máximo 5 ocasiões");
-        return; // Block selection
+        return;
       }
       setOccasions(prev => [...prev, item]);
     }
@@ -188,19 +194,22 @@ export const Onboarding: React.FC = () => {
       </div>
       <div className="flex flex-wrap gap-3 pb-32">
         {CUISINE_OPTIONS.map(opt => {
-          const isSelected = dislikes.includes(opt);
+          const isSelected = dislikes.includes(opt.label);
           return (
             <button
-              key={opt}
-              onClick={() => toggleDislike(opt)}
-              className={`flex items-center gap-2 rounded-full px-5 py-2.5 transition-all active:scale-95 text-sm font-bold border ${
+              key={opt.label}
+              onClick={() => toggleDislike(opt.label)}
+              className={`flex items-center gap-2 rounded-full px-4 py-2.5 transition-all active:scale-95 text-sm font-bold border ${
                 isSelected 
                   ? 'bg-primary border-primary text-white shadow-md' 
                   : 'bg-white border-black/5 text-dark hover:border-black/20'
               }`}
             >
-              {isSelected && <span className="material-symbols-outlined text-[18px]">close</span>}
-              {opt}
+              <span className={`material-symbols-outlined text-[18px] ${isSelected ? '' : 'text-primary'}`}>
+                {opt.icon}
+              </span>
+              {opt.label}
+              {isSelected && <span className="material-symbols-outlined text-[16px]">close</span>}
             </button>
           );
         })}
@@ -224,22 +233,28 @@ export const Onboarding: React.FC = () => {
       <div className="space-y-8 pb-32">
         {OCCASION_GROUPS.map((group) => (
           <section key={group.title}>
-            <h2 className="text-base font-bold text-gray-400 uppercase tracking-wide mb-3 ml-1">{group.title}</h2>
+            <h2 className="text-base font-bold text-gray-400 uppercase tracking-wide mb-3 ml-1 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px]">{group.icon}</span>
+              {group.title}
+            </h2>
             <div className="flex flex-wrap gap-2.5">
               {group.options.map(opt => {
-                const isSelected = occasions.includes(opt);
+                const isSelected = occasions.includes(opt.label);
                 return (
                   <button
-                    key={opt}
-                    onClick={() => toggleOccasion(opt)}
+                    key={opt.label}
+                    onClick={() => toggleOccasion(opt.label)}
                     className={`flex items-center gap-2 rounded-full px-4 py-2.5 transition-all active:scale-95 text-sm font-medium border ${
                       isSelected
                         ? 'bg-primary border-primary text-white shadow-md'
                         : 'bg-white border-black/5 text-dark'
                     }`}
                   >
-                    {opt}
-                    {isSelected && <span className="material-symbols-outlined text-[16px]">check</span>}
+                    <span className={`material-symbols-outlined text-[16px] ${isSelected ? '' : 'text-primary'}`}>
+                      {opt.icon}
+                    </span>
+                    {opt.label}
+                    {isSelected && <span className="material-symbols-outlined text-[14px]">check</span>}
                   </button>
                 );
               })}
@@ -264,22 +279,30 @@ export const Onboarding: React.FC = () => {
             <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md font-normal">1 opção</span>
           </h2>
           <div className="flex flex-col gap-2">
-            {RADAR_OPTIONS.frequencies.map(f => (
-              <button
-                key={f}
-                onClick={() => setRadar(prev => ({...prev, frequency: f}))}
-                className={`w-full flex items-center justify-between px-5 py-3.5 rounded-2xl border transition-all ${
-                  radar.frequency === f
-                    ? 'bg-primary border-primary text-white shadow-md'
-                    : 'bg-white border-transparent text-dark hover:bg-gray-50'
-                }`}
-              >
-                <span className="font-medium">{f}</span>
-                <div className={`size-5 rounded-full border-2 flex items-center justify-center ${radar.frequency === f ? 'border-white' : 'border-gray-300'}`}>
-                   {radar.frequency === f && <div className="size-2.5 bg-white rounded-full" />}
-                </div>
-              </button>
-            ))}
+            {RADAR_OPTIONS.frequencies.map(f => {
+              const isSelected = radar.frequency === f.label;
+              return (
+                <button
+                  key={f.label}
+                  onClick={() => setRadar(prev => ({...prev, frequency: f.label}))}
+                  className={`w-full flex items-center justify-between px-5 py-3.5 rounded-2xl border transition-all ${
+                    isSelected
+                      ? 'bg-primary border-primary text-white shadow-md'
+                      : 'bg-white border-transparent text-dark hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`material-symbols-outlined text-[20px] ${isSelected ? '' : 'text-primary'}`}>
+                      {f.icon}
+                    </span>
+                    <span className="font-medium">{f.label}</span>
+                  </div>
+                  <div className={`size-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-white' : 'border-gray-300'}`}>
+                     {isSelected && <div className="size-2.5 bg-white rounded-full" />}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </section>
 
@@ -294,19 +317,22 @@ export const Onboarding: React.FC = () => {
           </h2>
           <div className="flex flex-wrap gap-2.5">
             {RADAR_OPTIONS.placeTypes.map(t => {
-               const isSelected = radar.placeTypes.includes(t);
+               const isSelected = radar.placeTypes.includes(t.label);
                return (
                 <button
-                  key={t}
-                  onClick={() => toggleRadarPlaceType(t)}
+                  key={t.label}
+                  onClick={() => toggleRadarPlaceType(t.label)}
                   className={`flex items-center gap-2 rounded-full px-4 py-2.5 transition-all active:scale-95 text-sm font-medium border ${
                     isSelected
                       ? 'bg-primary border-primary text-white shadow-md'
                       : 'bg-white border-black/5 text-dark'
                   }`}
                 >
-                  {t}
-                  {isSelected && <span className="material-symbols-outlined text-[16px]">check</span>}
+                  <span className={`material-symbols-outlined text-[16px] ${isSelected ? '' : 'text-primary'}`}>
+                    {t.icon}
+                  </span>
+                  {t.label}
+                  {isSelected && <span className="material-symbols-outlined text-[14px]">check</span>}
                 </button>
                )
             })}
@@ -324,16 +350,21 @@ export const Onboarding: React.FC = () => {
           </h2>
           <div className="grid grid-cols-1 gap-3">
              {RADAR_OPTIONS.behaviors.map(b => {
-               const isSelected = radar.behavior.includes(b);
+               const isSelected = radar.behavior.includes(b.label);
                return (
                  <button 
-                   key={b}
-                   onClick={() => toggleRadarBehavior(b)}
+                   key={b.label}
+                   onClick={() => toggleRadarBehavior(b.label)}
                    className={`w-full flex justify-between items-center px-5 py-4 rounded-2xl border transition-all active:scale-[0.98] ${
                      isSelected ? 'bg-primary border-primary text-white shadow-md' : 'bg-white border-transparent'
                    }`}
                  >
-                   <span className={`font-medium ${isSelected ? 'font-bold' : ''}`}>{b}</span>
+                   <div className="flex items-center gap-3">
+                     <span className={`material-symbols-outlined text-[20px] ${isSelected ? '' : 'text-primary'}`}>
+                       {b.icon}
+                     </span>
+                     <span className={`font-medium ${isSelected ? 'font-bold' : ''}`}>{b.label}</span>
+                   </div>
                    {isSelected && <span className="material-symbols-outlined text-[20px]">check_circle</span>}
                    {!isSelected && <span className="material-symbols-outlined text-[20px] text-gray-300">circle</span>}
                  </button>
@@ -354,7 +385,7 @@ export const Onboarding: React.FC = () => {
       <div className="flex flex-col gap-3 pb-32">
         {RESTRICTION_OPTIONS.map(opt => {
           const isSelected = restrictions.includes(opt.label);
-          const isSpecial = opt.label === 'Não tenho restrições';
+          const isSpecial = opt.type === 'special';
           
           return (
             <button
@@ -367,7 +398,9 @@ export const Onboarding: React.FC = () => {
               }`}
             >
               <div className="flex items-center gap-3">
-                 {!isSpecial && <span className="material-symbols-outlined text-[20px]">restaurant</span>} 
+                 <span className={`material-symbols-outlined text-[20px] ${isSelected ? '' : isSpecial ? 'text-green-500' : 'text-primary'}`}>
+                   {opt.icon}
+                 </span>
                  <span className={`text-base ${isSelected ? 'font-bold' : 'font-medium'}`}>{opt.label}</span>
               </div>
               {isSelected 
@@ -395,15 +428,26 @@ export const Onboarding: React.FC = () => {
       <div className="fixed bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-cream via-cream/90 to-transparent w-full max-w-md mx-auto z-20">
         <button 
           onClick={handleNext}
-          disabled={!canContinue()}
+          disabled={!canContinue() || saving}
           className={`w-full h-14 rounded-full font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
-             canContinue() 
+             canContinue() && !saving
                ? 'bg-primary hover:bg-[#e6352b] text-white shadow-primary/20' 
                : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
           }`}
         >
-          {step === OnboardingStep.RESTRICTIONS ? 'Comece a explorar!' : 'Continuar'}
-          {step !== OnboardingStep.RESTRICTIONS && <span className="material-symbols-outlined font-bold">arrow_forward</span>}
+          {saving ? (
+            <>
+              <span className="material-symbols-outlined animate-spin">progress_activity</span>
+              Salvando...
+            </>
+          ) : step === OnboardingStep.RESTRICTIONS ? (
+            'Comece a explorar!'
+          ) : (
+            <>
+              Continuar
+              <span className="material-symbols-outlined font-bold">arrow_forward</span>
+            </>
+          )}
         </button>
         {occasionError && step === OnboardingStep.OCCASIONS && !canContinue() && (
              <p className="text-center text-xs text-primary font-bold mt-2">{occasionError}</p>

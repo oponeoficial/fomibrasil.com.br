@@ -1,20 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sidebar } from '../components/Navigation';
-import { MOCK_USERS, CUISINE_OPTIONS, RESTRICTION_OPTIONS } from '../constants';
-import { Restaurant } from '../types';
+import { CUISINE_OPTIONS, DEFAULT_AVATAR, DEFAULT_RESTAURANT } from '../constants';
+import { Restaurant, User } from '../types';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
 import { useAppContext } from '../AppContext';
 
 // --- BOUNDING BOX GRANDE RECIFE + INTERIOR PE ---
 const MAP_BOUNDS = {
-  minLat: -8.9,  // Sul (Carneiros/Tamandaré)
-  maxLat: -7.9,  // Norte (Olinda)
-  minLng: -36.1, // Oeste (Caruaru)
-  maxLng: -34.8  // Leste (Litoral)
+  minLat: -8.9,
+  maxLat: -7.9,
+  minLng: -36.1,
+  maxLng: -34.8
 };
 
-// Converter lat/lng para coordenadas X/Y do mapa (5-95%)
 function latLngToCoords(lat: number, lng: number): { x: number; y: number } {
   const x = 5 + ((lng - MAP_BOUNDS.minLng) / (MAP_BOUNDS.maxLng - MAP_BOUNDS.minLng)) * 90;
   const y = 5 + ((MAP_BOUNDS.maxLat - lat) / (MAP_BOUNDS.maxLat - MAP_BOUNDS.minLat)) * 90;
@@ -145,6 +144,9 @@ const FilterModal: React.FC<{
     { value: 4.8, label: '4.8+' }
   ];
 
+  // Get cuisine labels from CUISINE_OPTIONS (array of {label, icon})
+  const cuisineLabels = CUISINE_OPTIONS.map(c => c.label);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -177,7 +179,7 @@ const FilterModal: React.FC<{
           <div>
             <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Tipo de cozinha</h4>
             <div className="flex flex-wrap gap-2">
-              {CUISINE_OPTIONS.slice(0, 10).map(c => (
+              {cuisineLabels.slice(0, 12).map(c => (
                 <button 
                   key={c}
                   onClick={() => toggleCuisine(c)}
@@ -260,7 +262,11 @@ export const Discover: React.FC = () => {
   
   // Restaurants from Supabase
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingRestaurants, setLoadingRestaurants] = useState(true);
+  
+  // Profiles from Supabase
+  const [profiles, setProfiles] = useState<User[]>([]);
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
   
   // Modals & Feedback
   const [showFilters, setShowFilters] = useState(false);
@@ -280,7 +286,7 @@ export const Discover: React.FC = () => {
 
   // Fetch restaurants from Supabase
   const fetchRestaurants = async () => {
-    setLoading(true);
+    setLoadingRestaurants(true);
     try {
       let query = supabase
         .from('restaurants')
@@ -288,12 +294,10 @@ export const Discover: React.FC = () => {
         .eq('is_active', true)
         .order('name');
 
-      // Apply city filter
       if (filters.city) {
         query = query.eq('city', filters.city);
       }
 
-      // Apply price filter
       if (filters.prices.length > 0) {
         query = query.in('price_level', filters.prices.map(p => parseInt(p)));
       }
@@ -306,7 +310,6 @@ export const Discover: React.FC = () => {
         return;
       }
 
-      // Transform data with coords
       const transformed = (data || []).map(r => ({
         ...r,
         coords: r.latitude && r.longitude 
@@ -318,25 +321,79 @@ export const Discover: React.FC = () => {
     } catch (err) {
       console.error('Fetch error:', err);
     } finally {
-      setLoading(false);
+      setLoadingRestaurants(false);
+    }
+  };
+
+  // Fetch profiles from Supabase
+  const fetchProfiles = async (query?: string) => {
+    setLoadingProfiles(true);
+    try {
+      let dbQuery = supabase
+        .from('profiles')
+        .select('*')
+        .eq('is_banned', false)
+        .order('full_name');
+
+      if (query && query.length >= 2) {
+        dbQuery = dbQuery.or(`full_name.ilike.%${query}%,username.ilike.%${query}%`);
+      }
+
+      const { data, error } = await dbQuery.limit(50);
+
+      if (error) {
+        console.error('Error fetching profiles:', error);
+        return;
+      }
+
+      // Fetch counts for each profile
+      const profilesWithCounts = await Promise.all((data || []).map(async (profile) => {
+        const [reviewsRes, followersRes] = await Promise.all([
+          supabase.from('reviews').select('*', { count: 'exact', head: true }).eq('user_id', profile.id).eq('is_active', true),
+          supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', profile.id)
+        ]);
+
+        return {
+          ...profile,
+          reviews_count: reviewsRes.count || 0,
+          followers_count: followersRes.count || 0
+        };
+      }));
+
+      setProfiles(profilesWithCounts);
+    } catch (err) {
+      console.error('Fetch profiles error:', err);
+    } finally {
+      setLoadingProfiles(false);
     }
   };
 
   // Initial fetch
   useEffect(() => {
     fetchRestaurants();
+    fetchProfiles();
   }, []);
 
-  // Refetch when filters change
+  // Refetch restaurants when filters change
   useEffect(() => {
     fetchRestaurants();
   }, [filters.city, filters.prices]);
 
-  // Client-side filtering (cuisines, rating, search)
+  // Search profiles with debounce
+  useEffect(() => {
+    if (viewMode !== 'profiles') return;
+    
+    const timer = setTimeout(() => {
+      fetchProfiles(searchQuery);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, viewMode]);
+
+  // Client-side filtering for restaurants
   const displayRestaurants = useMemo(() => {
     let result = restaurants;
 
-    // Search filter
     if (searchQuery) {
       const lower = searchQuery.toLowerCase();
       result = result.filter(r => 
@@ -346,30 +403,18 @@ export const Discover: React.FC = () => {
       );
     }
 
-    // Cuisine filter
     if (filters.cuisines.length > 0) {
       result = result.filter(r => 
         r.cuisine_types?.some(c => filters.cuisines.includes(c))
       );
     }
 
-    // Rating filter (se tiver no futuro - por agora não temos rating no seed)
     if (filters.minRating > 0) {
       result = result.filter(r => (r.rating || 0) >= filters.minRating);
     }
 
     return result;
   }, [restaurants, searchQuery, filters.cuisines, filters.minRating]);
-
-  // Filtered Profiles
-  const filteredUsers = useMemo(() => {
-    if (!searchQuery) return MOCK_USERS; 
-    const lower = searchQuery.toLowerCase();
-    return MOCK_USERS.filter(u => 
-      u.full_name.toLowerCase().includes(lower) || 
-      u.username.toLowerCase().includes(lower)
-    );
-  }, [searchQuery]);
 
   const activeFiltersCount = 
     filters.cuisines.length + 
@@ -470,7 +515,7 @@ export const Discover: React.FC = () => {
              </svg>
              
              {/* Loading State */}
-             {loading && (
+             {loadingRestaurants && (
                <div className="absolute inset-0 flex items-center justify-center bg-black/10 z-50">
                   <div className="bg-white px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center">
                     <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2" />
@@ -480,7 +525,7 @@ export const Discover: React.FC = () => {
              )}
 
              {/* Empty State */}
-             {!loading && displayRestaurants.length === 0 && (
+             {!loadingRestaurants && displayRestaurants.length === 0 && (
                <div className="absolute inset-0 flex items-center justify-center">
                   <div className="text-center p-6">
                     <span className="material-symbols-outlined text-6xl text-gray-400 mb-4">restaurant</span>
@@ -539,27 +584,41 @@ export const Discover: React.FC = () => {
       {/* Profiles View Mode */}
       {viewMode === 'profiles' && (
         <div className="absolute inset-0 z-0 bg-cream pt-36 px-4 overflow-y-auto pb-24">
-           {filteredUsers.length === 0 ? (
+           {loadingProfiles ? (
+              <div className="flex flex-col items-center justify-center h-64">
+                 <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2" />
+                 <p className="text-gray-400 text-sm">Carregando perfis...</p>
+              </div>
+           ) : profiles.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-center">
                  <span className="material-symbols-outlined text-6xl text-gray-300 mb-2">person_search</span>
                  <p className="text-gray-400">Nenhum perfil encontrado</p>
               </div>
            ) : (
               <div className="space-y-3">
-                 {filteredUsers.map(user => (
+                 {profiles.map(user => (
                     <button 
                        key={user.id}
                        onClick={() => navigate(`/profile/${user.username}`)}
                        className="w-full bg-white rounded-2xl p-4 shadow-sm border border-black/5 flex items-center gap-4 hover:shadow-md transition-shadow text-left"
                     >
-                       <img src={user.profile_photo_url} className="size-14 rounded-full object-cover" alt={user.full_name} />
+                       <img 
+                         src={user.profile_photo_url || DEFAULT_AVATAR} 
+                         className="size-14 rounded-full object-cover" 
+                         alt={user.full_name}
+                         onError={(e) => {
+                           (e.target as HTMLImageElement).src = DEFAULT_AVATAR;
+                         }}
+                       />
                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
                              <span className="font-bold text-dark truncate">{user.full_name}</span>
                              {user.is_verified && <span className="material-symbols-outlined text-primary text-sm filled">verified</span>}
                           </div>
                           <p className="text-sm text-gray-500 truncate">@{user.username}</p>
-                          <p className="text-xs text-gray-400 mt-1">{user.reviews_count} reviews • {user.followers_count} seguidores</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {user.reviews_count || 0} reviews • {user.followers_count || 0} seguidores
+                          </p>
                        </div>
                        <span className="material-symbols-outlined text-gray-300">chevron_right</span>
                     </button>
