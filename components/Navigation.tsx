@@ -144,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           <div className="p-6 pb-8">
              <div className="flex items-center gap-2 opacity-90">
                <img 
-                 src="logo-fomi-vermelho.png" 
+                 src="/logo-fomi-vermelho.png" 
                  alt="Fomí" 
                  className="h-8 object-contain" 
                />

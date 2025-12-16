@@ -441,7 +441,7 @@ export const Feed: React.FC = () => {
           
           <div className="flex items-center justify-center">
              <img 
-               src="logo-fomi-vermelho.png" 
+               src="/logo-fomi-vermelho.png" 
                alt="Fomí" 
                className="h-10 object-contain"
              />

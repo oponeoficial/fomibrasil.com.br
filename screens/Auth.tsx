@@ -148,7 +148,7 @@ export const Login: React.FC = () => {
       <main className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full">
         <div className="flex flex-col items-center mb-8">
           <img 
-            src="logo-fomi-vermelho.png" 
+            src="/logo-fomi-vermelho.png" 
             alt="Fomí" 
             className="h-20 mb-4 object-contain"
           />
