@@ -1,60 +1,116 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAppContext } from '../AppContext';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
+  const { supabase } = useAppContext();
   
-  // Login Form State
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // Modals State
   const [showForgotModal, setShowForgotModal] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
-  
-  // Forgot Password Internal State
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMessage('');
+    setIsLoading(true);
 
-    // --- MOCK LOGIC FOR DEMONSTRATION ---
-    const loginLower = identifier.toLowerCase();
+    try {
+      const isEmail = identifier.includes('@');
+      let email = identifier;
 
-    // Scenario 1: Email not verified
-    // Trigger: include "nao" or "verify" in the login (e.g., "nao@teste.com")
-    if (loginLower.includes('nao') || loginLower.includes('verify')) {
-      setShowVerifyModal(true);
-      return;
+      // Se for username, buscar o email associado
+      if (!isEmail) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('email')
+          .eq('username', identifier.toLowerCase())
+          .single();
+
+        if (!profile?.email) {
+          setErrorMessage('Usuário não encontrado');
+          setIsLoading(false);
+          return;
+        }
+        email = profile.email;
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        if (error.message.includes('Email not confirmed')) {
+          setShowVerifyModal(true);
+        } else if (error.message.includes('Invalid login credentials')) {
+          setErrorMessage('E-mail ou senha incorretos');
+        } else {
+          setErrorMessage(error.message);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      if (data.user) {
+        // Verificar se completou onboarding
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('onboarding_completed')
+          .eq('id', data.user.id)
+          .single();
+
+        if (!profile?.onboarding_completed) {
+          navigate('/onboarding');
+        } else {
+          navigate('/feed');
+        }
+      }
+    } catch (err) {
+      setErrorMessage('Erro ao fazer login. Tente novamente.');
+    } finally {
+      setIsLoading(false);
     }
-
-    // Scenario 2: Onboarding not completed
-    // Trigger: include "novo" or "new" in the login (e.g., "novo@teste.com")
-    if (loginLower.includes('novo') || loginLower.includes('new')) {
-      navigate('/onboarding');
-      return;
-    }
-
-    // Scenario 3: Success -> Go to Feed
-    navigate('/feed');
   };
 
   const handleForgotPassword = () => {
-    // Reset internal state when opening
     setForgotEmail('');
     setForgotSent(false);
     setShowForgotModal(true);
   };
 
-  const submitForgotPassword = () => {
+  const submitForgotPassword = async () => {
     if (!forgotEmail) return;
-    // Simulate API call to create record in password_resets
-    setTimeout(() => {
+    setForgotLoading(true);
+
+    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
+      redirectTo: `${window.location.origin}/reset-password`
+    });
+
+    setForgotLoading(false);
+    if (!error) {
       setForgotSent(true);
-    }, 800);
+    }
+  };
+
+  const resendVerificationEmail = async () => {
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: identifier.includes('@') ? identifier : ''
+    });
+
+    if (!error) {
+      alert('E-mail de verificação reenviado!');
+    }
   };
 
   return (
@@ -65,7 +121,6 @@ export const Login: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowForgotModal(false)} />
           <div className="relative bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-bounce-in">
-            {/* Modal Header */}
             <div className="flex justify-between items-center p-5 border-b border-gray-100">
                <h3 className="text-lg font-bold text-dark">Recuperar senha</h3>
                <button onClick={() => setShowForgotModal(false)} className="size-8 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-500">
@@ -73,7 +128,6 @@ export const Login: React.FC = () => {
                </button>
             </div>
             
-            {/* Modal Content */}
             <div className="p-6">
               {!forgotSent ? (
                  <>
@@ -88,10 +142,10 @@ export const Login: React.FC = () => {
                    />
                    <button 
                      onClick={submitForgotPassword}
-                     disabled={!forgotEmail}
+                     disabled={!forgotEmail || forgotLoading}
                      className="w-full h-12 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
                    >
-                     Enviar link de recuperação
+                     {forgotLoading ? 'Enviando...' : 'Enviar link de recuperação'}
                    </button>
                  </>
               ) : (
@@ -127,7 +181,10 @@ export const Login: React.FC = () => {
               Para sua segurança, você precisa confirmar seu endereço de e-mail antes de acessar sua conta.
             </p>
             
-            <button className="w-full h-12 bg-dark text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform mb-3">
+            <button 
+              onClick={resendVerificationEmail}
+              className="w-full h-12 bg-dark text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform mb-3"
+            >
               Reenviar e-mail
             </button>
             <button onClick={() => setShowVerifyModal(false)} className="text-sm font-medium text-gray-400 hover:text-dark">
@@ -136,7 +193,6 @@ export const Login: React.FC = () => {
           </div>
         </div>
       )}
-
 
       {/* MAIN SCREEN CONTENT */}
       <header className="flex items-center py-4">
@@ -157,6 +213,13 @@ export const Login: React.FC = () => {
         </div>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-4">
+          {/* Error Message */}
+          {errorMessage && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+              {errorMessage}
+            </div>
+          )}
+
           {/* Email/User Input */}
           <div className="relative group">
             <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -210,8 +273,12 @@ export const Login: React.FC = () => {
             </button>
           </div>
 
-          <button type="submit" className="mt-4 w-full rounded-full bg-primary py-4 text-white font-bold shadow-lg shadow-primary/30 active:scale-[0.98] transition-transform">
-            Entrar
+          <button 
+            type="submit" 
+            disabled={isLoading}
+            className="mt-4 w-full rounded-full bg-primary py-4 text-white font-bold shadow-lg shadow-primary/30 active:scale-[0.98] transition-transform disabled:opacity-50"
+          >
+            {isLoading ? 'Entrando...' : 'Entrar'}
           </button>
         </form>
 
@@ -241,6 +308,8 @@ export const Login: React.FC = () => {
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
+  const { supabase } = useAppContext();
+
   const [formData, setFormData] = useState({
     name: '',
     username: '',
@@ -257,17 +326,17 @@ export const Register: React.FC = () => {
   const [passwordStrength, setPasswordStrength] = useState<0 | 1 | 2 | 3>(0);
   const [isLocating, setIsLocating] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // Real-time validation logic
   useEffect(() => {
     const currentErrors: {[key: string]: string} = {};
 
-    // Name Validation
     if (touched.name && formData.name.length < 3) {
       currentErrors.name = 'Mínimo 3 caracteres';
     }
 
-    // Email Validation (Format + Disposable Check)
     if (formData.email) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const disposableDomains = ['tempmail.com', '10minutemail.com', 'mailinator.com', 'throwawaymail.com', 'guerrillamail.com', 'yopmail.com'];
@@ -282,7 +351,6 @@ export const Register: React.FC = () => {
       }
     }
 
-    // Age Validation (Strict 18+)
     if (formData.birthDate) {
       const today = new Date();
       const birth = new Date(formData.birthDate);
@@ -298,17 +366,14 @@ export const Register: React.FC = () => {
         currentErrors.birthDate = 'Data de nascimento obrigatória';
     }
     
-    // Gender
     if (touched.gender && formData.gender === 'no_answer') {
         currentErrors.gender = 'Selecione um gênero';
     }
 
-    // Location
     if (touched.location && !formData.location) {
         currentErrors.location = 'Localização é obrigatória';
     }
 
-    // Password
     if (touched.password && formData.password.length < 8) {
         currentErrors.password = 'A senha deve ter no mínimo 8 caracteres';
     }
@@ -316,48 +381,48 @@ export const Register: React.FC = () => {
     setErrors(currentErrors);
   }, [formData, touched]);
 
-  // Username Check Simulation with Real-time Feedback
+  // Username Check - REAL check against Supabase
   useEffect(() => {
     if (!formData.username) {
       setUsernameStatus('idle');
       return;
     }
-    
-    // Reset status briefly while typing or before debounce fires
-    if (usernameStatus !== 'checking') {
-        // We don't necessarily want to flicker to idle if they type fast, 
-        // but removing the previous status is good.
-    }
 
-    const checkUsername = setTimeout(() => {
-      // Basic client-side validation first
+    const checkUsername = setTimeout(async () => {
       if (formData.username.length < 3) {
-          setUsernameStatus('taken');
-          return;
+        setUsernameStatus('taken');
+        return;
+      }
+
+      if (formData.username.includes(' ')) {
+        setUsernameStatus('taken');
+        return;
       }
 
       setUsernameStatus('checking');
       
-      setTimeout(() => {
-        // Mock check against server
-        const takenUsernames = ['admin', 'root', 'suporte', 'fomi', 'teste'];
-        const val = formData.username.toLowerCase();
-        
-        const isTaken = takenUsernames.includes(val);
-        const hasSpace = val.includes(' ');
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('username', formData.username.toLowerCase())
+          .single();
 
-        if (isTaken || hasSpace) {
-           setUsernameStatus('taken');
+        if (data) {
+          setUsernameStatus('taken');
         } else {
-           setUsernameStatus('available');
+          setUsernameStatus('available');
         }
-      }, 800); // 800ms delay to feel like a real request
-    }, 500); // 500ms debounce
+      } catch {
+        // Se não encontrou (erro PGRST116), username está disponível
+        setUsernameStatus('available');
+      }
+    }, 500);
 
     return () => clearTimeout(checkUsername);
-  }, [formData.username]);
+  }, [formData.username, supabase]);
 
-  // Password Strength Calculation
+  // Password Strength
   useEffect(() => {
     const pwd = formData.password;
     if (!pwd) {
@@ -365,13 +430,12 @@ export const Register: React.FC = () => {
       return;
     }
     let strength: 0 | 1 | 2 | 3 = 0;
-    if (pwd.length >= 8) strength = 1; // Weak
-    if (pwd.length >= 8 && /\d/.test(pwd)) strength = 2; // Medium
-    if (pwd.length >= 8 && /\d/.test(pwd) && /[^A-Za-z0-9]/.test(pwd)) strength = 3; // Strong
+    if (pwd.length >= 8) strength = 1;
+    if (pwd.length >= 8 && /\d/.test(pwd)) strength = 2;
+    if (pwd.length >= 8 && /\d/.test(pwd) && /[^A-Za-z0-9]/.test(pwd)) strength = 3;
     
     setPasswordStrength(strength);
   }, [formData.password]);
-
 
   const handleBlur = (field: string) => {
     setTouched(prev => ({ ...prev, [field]: true }));
@@ -383,11 +447,9 @@ export const Register: React.FC = () => {
   };
 
   const handleGPS = () => {
-    // If manual location is entered, prevent GPS unless they clear it first
     if (formData.location) return;
 
     setIsLocating(true);
-    // Remove specific error for location when retrying
     if (errors.location) {
         setErrors(prev => {
             const newErrs = { ...prev };
@@ -412,7 +474,6 @@ export const Register: React.FC = () => {
       async (position) => {
         const { latitude, longitude } = position.coords;
         
-        // Try real reverse geocoding with OpenStreetMap
         try {
             const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`, {
                 headers: {
@@ -434,7 +495,6 @@ export const Register: React.FC = () => {
                 throw new Error("Nominatim API error");
             }
         } catch (e) {
-            // Fallback to coordinates if API fails
             setFormData(prev => ({ ...prev, location: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}` }));
         }
         
@@ -468,22 +528,19 @@ export const Register: React.FC = () => {
   };
 
   const canSubmit = () => {
-    // Basic check if errors object is empty (ignoring non-blocking issues if any) and required fields are filled
     const hasErrors = Object.keys(errors).length > 0;
     const requiredFilled = formData.name && formData.username && formData.email && formData.birthDate && formData.location && formData.password;
-    
-    // Double check specific conditions to be safe
     const isAdult = !errors.birthDate;
     const isUsernameOk = usernameStatus === 'available';
 
-    return !hasErrors && requiredFilled && isAdult && isUsernameOk;
+    return !hasErrors && requiredFilled && isAdult && isUsernameOk && !isSubmitting;
   };
 
-  const handleSubmit = () => {
-    if (canSubmit()) {
-      setShowSuccessModal(true);
-    } else {
-      // Mark all as touched to show errors
+  // ✅ SIGNUP REAL COM SUPABASE
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!canSubmit()) {
       setTouched({
         name: true,
         username: true,
@@ -493,6 +550,59 @@ export const Register: React.FC = () => {
         location: true,
         password: true
       });
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError('');
+
+    try {
+      // 1. Criar usuário no Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.name,
+            username: formData.username.toLowerCase()
+          }
+        }
+      });
+
+      if (authError) {
+        if (authError.message.includes('already registered')) {
+          setSubmitError('Este e-mail já está cadastrado');
+        } else {
+          setSubmitError(authError.message);
+        }
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (authData.user) {
+        // 2. Atualizar profile com dados adicionais
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({
+            full_name: formData.name,
+            username: formData.username.toLowerCase(),
+            date_of_birth: formData.birthDate,
+            gender: formData.gender === 'no_answer' ? 'other' : formData.gender,
+            city: formData.location
+          })
+          .eq('id', authData.user.id);
+
+        if (profileError) {
+          console.error('Profile update error:', profileError);
+        }
+
+        // 3. Mostrar modal de sucesso
+        setShowSuccessModal(true);
+      }
+    } catch (err) {
+      setSubmitError('Erro ao criar conta. Tente novamente.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -501,7 +611,7 @@ export const Register: React.FC = () => {
       {/* Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowSuccessModal(false)}></div>
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
           <div className="bg-white rounded-3xl p-8 w-full max-w-xs shadow-2xl relative z-10 flex flex-col items-center text-center animate-bounce-in">
             <div className="size-16 rounded-full bg-green-100 flex items-center justify-center mb-4 text-green-600">
                <span className="material-symbols-outlined text-4xl">mark_email_read</span>
@@ -535,7 +645,14 @@ export const Register: React.FC = () => {
           </div>
         </div>
 
-        <form className="flex flex-col gap-5">
+        {/* Error Message */}
+        {submitError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm mb-4">
+            {submitError}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
            {/* Full Name */}
            <div className="space-y-1.5">
              <label className="text-sm font-bold ml-1">Nome Completo</label>
@@ -559,7 +676,7 @@ export const Register: React.FC = () => {
              {errors.name && <p className="text-xs text-primary font-medium ml-2">{errors.name}</p>}
            </div>
 
-           {/* Username - Enhanced Visual Feedback */}
+           {/* Username */}
            <div className="space-y-1.5">
              <label className="text-sm font-bold ml-1">Nome de Usuário</label>
              <div className="relative">
@@ -591,7 +708,6 @@ export const Register: React.FC = () => {
                </div>
              </div>
              
-             {/* Dynamic Status Message */}
              <div className="ml-2 min-h-[20px] flex items-center">
                 {usernameStatus === 'taken' && (
                     <p className="text-xs text-primary font-medium">
@@ -708,7 +824,6 @@ export const Register: React.FC = () => {
                 />
              </div>
              
-             {/* Strength Indicator */}
              {formData.password.length > 0 && (
                <div className="mt-2 ml-1 flex items-center gap-2">
                  <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
@@ -729,8 +844,7 @@ export const Register: React.FC = () => {
            </div>
 
            <button 
-             type="button" 
-             onClick={handleSubmit} 
+             type="submit" 
              disabled={!canSubmit()}
              className={`mt-4 w-full h-14 rounded-full text-white text-lg font-bold shadow-lg transition-all active:scale-[0.98] ${
                canSubmit() 
@@ -738,11 +852,11 @@ export const Register: React.FC = () => {
                  : 'bg-gray-300 cursor-not-allowed shadow-none'
              }`}
            >
-             Criar Conta
+             {isSubmitting ? 'Criando conta...' : 'Criar Conta'}
            </button>
 
            <div className="text-center pb-4">
-             <button onClick={() => navigate('/login')} className="text-sm text-secondary font-medium">
+             <button type="button" onClick={() => navigate('/login')} className="text-sm text-secondary font-medium">
                Já tem conta? <span className="font-bold text-primary">Entrar</span>
              </button>
            </div>
