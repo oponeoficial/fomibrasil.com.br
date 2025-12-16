@@ -30,13 +30,13 @@ export const Login: React.FC = () => {
 
       // Se for username, buscar o email associado
       if (!isEmail) {
-        const { data: profile } = await supabase
+        const { data: profile, error } = await supabase
           .from('profiles')
           .select('email')
           .eq('username', identifier.toLowerCase())
-          .single();
+          .maybeSingle();
 
-        if (!profile?.email) {
+        if (error || !profile?.email) {
           setErrorMessage('Usuário não encontrado');
           setIsLoading(false);
           return;
@@ -67,7 +67,7 @@ export const Login: React.FC = () => {
           .from('profiles')
           .select('onboarding_completed')
           .eq('id', data.user.id)
-          .single();
+          .maybeSingle();
 
         if (!profile?.onboarding_completed) {
           navigate('/onboarding');
@@ -402,19 +402,21 @@ export const Register: React.FC = () => {
       setUsernameStatus('checking');
       
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('profiles')
           .select('username')
           .eq('username', formData.username.toLowerCase())
-          .single();
+          .maybeSingle();
 
-        if (data) {
+        if (error) {
+          console.error('Username check error:', error);
+          setUsernameStatus('available');
+        } else if (data) {
           setUsernameStatus('taken');
         } else {
           setUsernameStatus('available');
         }
       } catch {
-        // Se não encontrou (erro PGRST116), username está disponível
         setUsernameStatus('available');
       }
     }, 500);
