@@ -1,0 +1,8 @@
+{
+  "name": "Fomí",
+  "description": "A social gastronomy app for discovering, reviewing, and sharing dining experiences.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
