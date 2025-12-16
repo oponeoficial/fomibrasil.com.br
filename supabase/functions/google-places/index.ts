@@ -15,11 +15,11 @@ const CITIES = [
   { name: "Recife", state: "PE", lat: -8.0476, lng: -34.8770 },
   { name: "Olinda", state: "PE", lat: -7.9914, lng: -34.8416 },
   { name: "Jaboatão dos Guararapes", state: "PE", lat: -8.1128, lng: -35.0158 },
-  { name: "Cabo de Santo Agostinho", state: "PE", lat: -8.2833, lng: -35.0333 }, // Paiva/Candeias
+  { name: "Cabo de Santo Agostinho", state: "PE", lat: -8.2833, lng: -35.0333 },
   { name: "Gravatá", state: "PE", lat: -8.2005, lng: -35.5644 },
   { name: "Caruaru", state: "PE", lat: -8.2760, lng: -35.9819 },
-  { name: "Tamandaré", state: "PE", lat: -8.7594, lng: -35.1036 }, // Carneiros
-  { name: "Ipojuca", state: "PE", lat: -8.3967, lng: -35.0636 }, // Porto de Galinhas/Muro Alto/Serrambi
+  { name: "Tamandaré", state: "PE", lat: -8.7594, lng: -35.1036 },
+  { name: "Ipojuca", state: "PE", lat: -8.3967, lng: -35.0636 },
 ];
 
 const CUISINE_TYPES = [
@@ -35,23 +35,9 @@ const CUISINE_TYPES = [
   "bakery"
 ];
 
-// Nearby Search com filtros
-async function searchNearby(lat: number, lng: number, type: string, pageToken?: string): Promise<any> {
-  let url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=15000&type=${type}&language=pt-BR&key=${GOOGLE_API_KEY}`;
-  
-  if (pageToken) {
-    url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?pagetoken=${pageToken}&key=${GOOGLE_API_KEY}`;
-  }
-
-  const response = await fetch(url);
-  return response.json();
-}
-
-// Text Search por cidade
-async function searchByCity(city: string, type: string): Promise<any> {
-  const query = `${type} em ${city}`;
-  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&type=restaurant&language=pt-BR&key=${GOOGLE_API_KEY}`;
-  
+// Nearby Search
+async function searchNearby(lat: number, lng: number, type: string): Promise<any> {
+  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=15000&type=${type}&language=pt-BR&key=${GOOGLE_API_KEY}`;
   const response = await fetch(url);
   return response.json();
 }
@@ -76,7 +62,7 @@ function getPhotoUrl(photoReference: string, maxWidth = 800): string {
   return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=${maxWidth}&photo_reference=${photoReference}&key=${GOOGLE_API_KEY}`;
 }
 
-// Extrair cidade e bairro do address_components
+// Extrair cidade e bairro
 function extractLocation(components: any[]): { city: string; neighborhood: string } {
   let city = "";
   let neighborhood = "";
@@ -85,10 +71,7 @@ function extractLocation(components: any[]): { city: string; neighborhood: strin
     if (comp.types.includes("administrative_area_level_2")) {
       city = comp.long_name;
     }
-    if (comp.types.includes("sublocality_level_1") || comp.types.includes("sublocality")) {
-      neighborhood = comp.long_name;
-    }
-    if (comp.types.includes("neighborhood")) {
+    if (comp.types.includes("sublocality_level_1") || comp.types.includes("sublocality") || comp.types.includes("neighborhood")) {
       neighborhood = comp.long_name;
     }
   }
@@ -96,7 +79,7 @@ function extractLocation(components: any[]): { city: string; neighborhood: strin
   return { city, neighborhood };
 }
 
-// Mapear types do Google para cuisine_types
+// Mapear cuisine types
 function mapCuisineTypes(types: string[]): string[] {
   const cuisineMap: Record<string, string> = {
     "brazilian_restaurant": "Brasileira",
@@ -107,8 +90,6 @@ function mapCuisineTypes(types: string[]): string[] {
     "pizza_restaurant": "Pizzaria",
     "mexican_restaurant": "Mexicana",
     "chinese_restaurant": "Chinesa",
-    "indian_restaurant": "Indiana",
-    "french_restaurant": "Francesa",
     "bar": "Bar",
     "cafe": "Café",
     "bakery": "Padaria",
@@ -121,17 +102,28 @@ function mapCuisineTypes(types: string[]): string[] {
     .slice(0, 3);
 }
 
-// BULK SEED - Popular banco com restaurantes
+// BULK SEED OTIMIZADO - Só insere restaurantes NOVOS
 async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: number; errors: string[] }> {
   const results = { inserted: 0, skipped: 0, errors: [] as string[] };
+
+  // 1. BUSCAR TODOS OS google_place_id JÁ EXISTENTES (1 query só)
+  const { data: existingPlaces } = await supabase
+    .from("restaurants")
+    .select("google_place_id");
+  
+  const existingIds = new Set(
+    (existingPlaces || []).map((p: any) => p.google_place_id).filter(Boolean)
+  );
+  
+  console.log(`📊 ${existingIds.size} restaurantes já cadastrados no banco`);
+
   const processedIds = new Set<string>();
 
   for (const city of CITIES) {
-    console.log(`🔍 Buscando restaurantes em ${city.name}...`);
+    console.log(`🔍 Buscando novos restaurantes em ${city.name}...`);
     
     for (const type of CUISINE_TYPES) {
       try {
-        // Buscar por proximidade
         const nearbyData = await searchNearby(city.lat, city.lng, type);
         
         if (nearbyData.status !== "OK") continue;
@@ -140,23 +132,18 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
           // Filtros: rating >= 4.0 e reviews >= 10
           if ((place.rating || 0) < 4.0) continue;
           if ((place.user_ratings_total || 0) < 10) continue;
-          if (processedIds.has(place.place_id)) continue;
           
+          // Já processado nesta execução?
+          if (processedIds.has(place.place_id)) continue;
           processedIds.add(place.place_id);
 
-          // Verificar se já existe no banco
-          const { data: existing } = await supabase
-            .from("restaurants")
-            .select("id")
-            .eq("google_place_id", place.place_id)
-            .single();
-
-          if (existing) {
+          // JÁ EXISTE NO BANCO? (verificação local, SEM query extra)
+          if (existingIds.has(place.place_id)) {
             results.skipped++;
             continue;
           }
 
-          // Buscar detalhes completos
+          // Buscar detalhes (só para restaurantes NOVOS)
           const details = await getPlaceDetails(place.place_id);
           if (!details) continue;
 
@@ -187,15 +174,15 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
             results.errors.push(`${details.name}: ${error.message}`);
           } else {
             results.inserted++;
-            console.log(`✅ ${details.name} (${extractedCity})`);
+            existingIds.add(details.place_id); // Marca como existente
+            console.log(`✅ NOVO: ${details.name} (${extractedCity})`);
           }
 
-          // Rate limiting - 100ms entre requests
+          // Rate limiting - evitar bloqueio da API
           await new Promise(r => setTimeout(r, 100));
         }
 
-        // Delay entre tipos de busca
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
         
       } catch (err) {
         results.errors.push(`${city.name}/${type}: ${(err as Error).message}`);
@@ -203,17 +190,16 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
     }
   }
 
+  console.log(`📊 Resultado final: ${results.inserted} novos inseridos, ${results.skipped} já existiam`);
   return results;
 }
 
-// Busca única (funcionalidade original mantida)
+// Busca única (para autocomplete no app)
 async function searchPlace(query: string, location?: string) {
   const searchQuery = location ? `${query} ${location}` : query;
   const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(searchQuery)}&type=restaurant&language=pt-BR&key=${GOOGLE_API_KEY}`;
-
   const response = await fetch(url);
   const data = await response.json();
-
   return data.status === "OK" && data.results.length > 0 ? data.results[0] : null;
 }
 
