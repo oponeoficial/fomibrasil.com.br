@@ -1,23 +1,28 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sidebar } from '../components/Navigation';
-import { MOCK_RESTAURANTS, MOCK_USERS, CUISINE_OPTIONS, RESTRICTION_OPTIONS } from '../constants';
+import { MOCK_USERS, CUISINE_OPTIONS, RESTRICTION_OPTIONS } from '../constants';
 import { Restaurant } from '../types';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
-import { GoogleGenAI } from "@google/genai";
+import { useAppContext } from '../AppContext';
 
-// --- HELPER ---
-const parseDistance = (d: string | undefined): number => {
-  if (!d) return 99999;
-  // Assumes format like "1.2km" or "500m"
-  if (d.includes('km')) {
-    return parseFloat(d.replace('km', ''));
-  }
-  if (d.includes('m')) {
-    return parseFloat(d.replace('m', '')) / 1000;
-  }
-  return 99999;
+// --- BOUNDING BOX GRANDE RECIFE + INTERIOR PE ---
+const MAP_BOUNDS = {
+  minLat: -8.9,  // Sul (Carneiros/Tamandaré)
+  maxLat: -7.9,  // Norte (Olinda)
+  minLng: -36.1, // Oeste (Caruaru)
+  maxLng: -34.8  // Leste (Litoral)
 };
+
+// Converter lat/lng para coordenadas X/Y do mapa (5-95%)
+function latLngToCoords(lat: number, lng: number): { x: number; y: number } {
+  const x = 5 + ((lng - MAP_BOUNDS.minLng) / (MAP_BOUNDS.maxLng - MAP_BOUNDS.minLng)) * 90;
+  const y = 5 + ((MAP_BOUNDS.maxLat - lat) / (MAP_BOUNDS.maxLat - MAP_BOUNDS.minLat)) * 90;
+  return { 
+    x: Math.max(5, Math.min(95, x)), 
+    y: Math.max(5, Math.min(95, y)) 
+  };
+}
 
 // --- TOAST COMPONENT ---
 const Toast: React.FC<{ message: string | null; onClose: () => void }> = ({ message, onClose }) => {
@@ -41,7 +46,6 @@ const Toast: React.FC<{ message: string | null; onClose: () => void }> = ({ mess
 };
 
 // --- FILTER INTERFACE & MODAL ---
-
 interface FilterState {
   cuisines: string[];
   occasions: string[];
@@ -49,7 +53,20 @@ interface FilterState {
   prices: string[];
   maxDistance: number;
   dietary: string[];
+  city: string;
 }
+
+const CITIES = [
+  { value: '', label: 'Todas as cidades' },
+  { value: 'Recife', label: 'Recife' },
+  { value: 'Olinda', label: 'Olinda' },
+  { value: 'Jaboatão dos Guararapes', label: 'Jaboatão' },
+  { value: 'Cabo de Santo Agostinho', label: 'Cabo (Paiva/Candeias)' },
+  { value: 'Gravatá', label: 'Gravatá' },
+  { value: 'Caruaru', label: 'Caruaru' },
+  { value: 'Tamandaré', label: 'Tamandaré (Carneiros)' },
+  { value: 'Ipojuca', label: 'Ipojuca (Muro Alto)' },
+];
 
 const FilterModal: React.FC<{
   isOpen: boolean;
@@ -63,8 +80,8 @@ const FilterModal: React.FC<{
   const [selectedPrices, setSelectedPrices] = useState<string[]>(currentFilters.prices);
   const [maxDistance, setMaxDistance] = useState(currentFilters.maxDistance);
   const [selectedDietary, setSelectedDietary] = useState<string[]>(currentFilters.dietary);
+  const [selectedCity, setSelectedCity] = useState(currentFilters.city);
 
-  // Sync internal state if props change when reopening
   useEffect(() => {
     if (isOpen) {
       setSelectedCuisines(currentFilters.cuisines);
@@ -73,6 +90,7 @@ const FilterModal: React.FC<{
       setSelectedPrices(currentFilters.prices);
       setMaxDistance(currentFilters.maxDistance);
       setSelectedDietary(currentFilters.dietary);
+      setSelectedCity(currentFilters.city);
     }
   }, [isOpen, currentFilters]);
 
@@ -82,16 +100,8 @@ const FilterModal: React.FC<{
     setSelectedCuisines(prev => prev.includes(c) ? prev.filter(i => i !== c) : [...prev, c]);
   };
 
-  const toggleOccasion = (o: string) => {
-    setSelectedOccasions(prev => prev.includes(o) ? prev.filter(i => i !== o) : [...prev, o]);
-  };
-
   const togglePrice = (p: string) => {
     setSelectedPrices(prev => prev.includes(p) ? prev.filter(i => i !== p) : [...prev, p]);
-  };
-
-  const toggleDietary = (d: string) => {
-    setSelectedDietary(prev => prev.includes(d) ? prev.filter(i => i !== d) : [...prev, d]);
   };
 
   const handleApply = () => {
@@ -101,7 +111,8 @@ const FilterModal: React.FC<{
       minRating,
       prices: selectedPrices,
       maxDistance,
-      dietary: selectedDietary
+      dietary: selectedDietary,
+      city: selectedCity
     });
     onClose();
   };
@@ -113,7 +124,8 @@ const FilterModal: React.FC<{
       minRating: 0,
       prices: [],
       maxDistance: 50,
-      dietary: []
+      dietary: [],
+      city: ''
     };
     setSelectedCuisines([]);
     setSelectedOccasions([]);
@@ -121,16 +133,23 @@ const FilterModal: React.FC<{
     setSelectedPrices([]);
     setMaxDistance(50);
     setSelectedDietary([]);
+    setSelectedCity('');
     onApply(cleared);
     onClose();
   };
 
+  const ratingOptions = [
+    { value: 0, label: 'Todos' },
+    { value: 4.0, label: '4.0+' },
+    { value: 4.5, label: '4.5+' },
+    { value: 4.8, label: '4.8+' }
+  ];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-dark rounded-3xl w-full max-w-sm max-h-[85vh] shadow-2xl animate-bounce-in flex flex-col overflow-hidden text-cream border border-gray-800">
+      <div className="relative bg-dark rounded-3xl w-full max-w-sm max-h-[85vh] shadow-2xl flex flex-col overflow-hidden text-cream border border-gray-800">
         
-        {/* Header */}
         <div className="flex justify-between items-center p-5 border-b border-white/10">
           <h3 className="text-xl font-bold">Filtros</h3>
           <button onClick={onClose} className="size-8 flex items-center justify-center rounded-full hover:bg-white/10">
@@ -138,129 +157,89 @@ const FilterModal: React.FC<{
           </button>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-8 no-scrollbar">
           
+          {/* City Filter */}
+          <div>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Cidade</h4>
+            <select 
+              value={selectedCity}
+              onChange={(e) => setSelectedCity(e.target.value)}
+              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white"
+            >
+              {CITIES.map(c => (
+                <option key={c.value} value={c.value} className="bg-dark">{c.label}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Cuisine */}
           <div>
             <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Tipo de cozinha</h4>
             <div className="flex flex-wrap gap-2">
-              {CUISINE_OPTIONS.slice(0, 8).map(c => (
+              {CUISINE_OPTIONS.slice(0, 10).map(c => (
                 <button 
                   key={c}
                   onClick={() => toggleCuisine(c)}
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${selectedCuisines.includes(c) ? 'bg-cream text-dark border-cream' : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'}`}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    selectedCuisines.includes(c) 
+                      ? 'bg-primary text-white border-primary' 
+                      : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'
+                  }`}
                 >
                   {c}
                 </button>
               ))}
-              <span className="text-xs text-gray-500 self-center">...</span>
             </div>
           </div>
 
-          {/* Occasion */}
+          {/* Rating */}
           <div>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Ocasião</h4>
-            <div className="flex flex-wrap gap-2">
-              {['Date', 'Amigos', 'Família', 'Trabalho', 'Sozinho'].map(o => (
-                <button 
-                  key={o}
-                  onClick={() => toggleOccasion(o)}
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${selectedOccasions.includes(o) ? 'bg-cream text-dark border-cream' : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'}`}
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Avaliação mínima</h4>
+            <div className="flex gap-2">
+              {ratingOptions.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setMinRating(opt.value)}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    minRating === opt.value 
+                      ? 'bg-primary text-white border-primary' 
+                      : 'bg-transparent text-gray-300 border-gray-600'
+                  }`}
                 >
-                  {o}
+                  {opt.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Price Range */}
+          {/* Price */}
           <div>
-             <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Faixa de Preço</h4>
-             <div className="flex gap-2">
-                {['$', '$$', '$$$', '$$$$'].map(p => (
-                   <button 
-                     key={p}
-                     onClick={() => togglePrice(p)}
-                     className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-colors ${selectedPrices.includes(p) ? 'bg-cream text-dark border-cream' : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'}`}
-                   >
-                     {p}
-                   </button>
-                ))}
-             </div>
-          </div>
-
-          {/* Distance Slider */}
-          <div>
-            <div className="flex justify-between items-center mb-4">
-               <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Distância Máxima</h4>
-               <div className="flex items-center gap-1 text-cream font-bold text-sm">
-                 {maxDistance >= 50 ? '50km+' : `${maxDistance}km`}
-               </div>
+            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Faixa de preço</h4>
+            <div className="flex gap-2">
+              {['$', '$$', '$$$', '$$$$'].map((p, i) => (
+                <button
+                  key={p}
+                  onClick={() => togglePrice(String(i + 1))}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    selectedPrices.includes(String(i + 1))
+                      ? 'bg-primary text-white border-primary' 
+                      : 'bg-transparent text-gray-300 border-gray-600'
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
             </div>
-            <input 
-              type="range" 
-              min="1" 
-              max="50" 
-              step="1" 
-              value={maxDistance}
-              onChange={e => setMaxDistance(parseFloat(e.target.value))}
-              className="w-full accent-primary h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-2">
-               <span>1km</span>
-               <span>50km+</span>
-            </div>
-          </div>
-
-          {/* Rating Slider */}
-          <div>
-            <div className="flex justify-between items-center mb-4">
-               <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider">Avaliação mínima</h4>
-               <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
-                 <span className="material-symbols-outlined filled text-[20px]">star</span>
-                 {minRating > 0 ? minRating.toFixed(1) : 'Qualquer'}
-               </div>
-            </div>
-            <input 
-              type="range" 
-              min="0" 
-              max="10" 
-              step="0.5" 
-              value={minRating}
-              onChange={e => setMinRating(parseFloat(e.target.value))}
-              className="w-full accent-primary h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-2">
-               <span>0.0</span>
-               <span>10.0</span>
-            </div>
-          </div>
-
-          {/* Dietary Restrictions */}
-          <div>
-             <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Restrições Alimentares</h4>
-             <div className="flex flex-wrap gap-2">
-                {RESTRICTION_OPTIONS.filter(r => r.type !== 'special').map(opt => (
-                   <button
-                     key={opt.label}
-                     onClick={() => toggleDietary(opt.label)}
-                     className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${selectedDietary.includes(opt.label) ? 'bg-cream text-dark border-cream' : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'}`}
-                   >
-                     {opt.label}
-                   </button>
-                ))}
-             </div>
           </div>
 
         </div>
 
-        {/* Footer */}
         <div className="p-5 border-t border-white/10 flex gap-4 bg-dark">
-          <button onClick={handleClear} className="flex-1 py-3 rounded-xl border border-white/20 text-white font-bold hover:bg-white/5 transition-colors">
+          <button onClick={handleClear} className="flex-1 py-3 rounded-xl border border-white/20 text-white font-bold hover:bg-white/5">
             Limpar
           </button>
-          <button onClick={handleApply} className="flex-1 py-3 rounded-xl bg-primary text-white font-bold shadow-lg shadow-primary/20 active:scale-95 transition-transform">
+          <button onClick={handleApply} className="flex-1 py-3 rounded-xl bg-primary text-white font-bold shadow-lg shadow-primary/20">
             Aplicar
           </button>
         </div>
@@ -271,15 +250,17 @@ const FilterModal: React.FC<{
 
 
 // --- MAIN DISCOVER SCREEN ---
-
 export const Discover: React.FC = () => {
   const navigate = useNavigate();
+  const { supabase } = useAppContext();
+  
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'restaurants' | 'profiles'>('restaurants');
   const [searchQuery, setSearchQuery] = useState('');
-  const [aiRestaurants, setAiRestaurants] = useState<Restaurant[]>([]);
-  const [loadingAi, setLoadingAi] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  
+  // Restaurants from Supabase
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [loading, setLoading] = useState(true);
   
   // Modals & Feedback
   const [showFilters, setShowFilters] = useState(false);
@@ -293,128 +274,94 @@ export const Discover: React.FC = () => {
     minRating: 0,
     prices: [],
     maxDistance: 50,
-    dietary: []
+    dietary: [],
+    city: ''
   });
 
-  // --- GOOGLE MAPS GENAI INTEGRATION ---
-  const fetchRestaurantsFromAI = async (query: string) => {
-    setLoadingAi(true);
-    setAiRestaurants([]); // Clear previous results
-    
+  // Fetch restaurants from Supabase
+  const fetchRestaurants = async () => {
+    setLoading(true);
     try {
-      // Get current location if possible, default to São Paulo
-      let lat = -23.5505;
-      let lng = -46.6333;
-      
-      if ("geolocation" in navigator) {
-         try {
-           const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-             navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
-           });
-           lat = pos.coords.latitude;
-           lng = pos.coords.longitude;
-         } catch (e) {
-           console.log("Using default location");
-         }
+      let query = supabase
+        .from('restaurants')
+        .select('*')
+        .eq('is_active', true)
+        .order('name');
+
+      // Apply city filter
+      if (filters.city) {
+        query = query.eq('city', filters.city);
       }
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const prompt = `Find 8 actual, highly-rated restaurants near latitude ${lat}, longitude ${lng} using Google Maps. 
-      ${query ? `Filter matching: "${query}".` : ''} 
-      ${filters.cuisines.length > 0 ? `Cuisine types: ${filters.cuisines.join(', ')}.` : ''}
-      
-      Return a strict list where each line is a restaurant formatted exactly like this:
-      Name | Type | Price (1-4) | Rating (number) | Address | Detailed Description
-      
-      Verify using Google Maps tool. Ensure these are real places.`;
+      // Apply price filter
+      if (filters.prices.length > 0) {
+        query = query.in('price_level', filters.prices.map(p => parseInt(p)));
+      }
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleMaps: {} }],
-        }
-      });
+      const { data, error } = await query.limit(100);
 
-      const text = response.text || "";
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      
-      const parsedRestaurants: Restaurant[] = [];
-      const lines = text.split('\n');
+      if (error) {
+        console.error('Error fetching restaurants:', error);
+        setToastMessage('Erro ao carregar restaurantes');
+        return;
+      }
 
-      lines.forEach((line, index) => {
-         const parts = line.split('|').map(s => s.trim());
-         if (parts.length >= 6) {
-           const name = parts[0];
-           
-           // Find grounding metadata for Google Maps URL
-           // Specifically look for chunks from 'maps' or fall back to web uri if maps missing
-           const mapChunk = groundingChunks.find(c => {
-             const titleMatch = c.web?.title?.toLowerCase().includes(name.toLowerCase());
-             const uriMatch = c.web?.uri?.toLowerCase().includes(name.toLowerCase().replace(/ /g, '+'));
-             // Check for maps specific chunk (although SDK typings might vary, usually it's in groundingChunks)
-             return titleMatch || uriMatch;
-           });
-           
-           const mapsUrl = mapChunk?.web?.uri || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name + ' ' + parts[4])}`;
+      // Transform data with coords
+      const transformed = (data || []).map(r => ({
+        ...r,
+        coords: r.latitude && r.longitude 
+          ? latLngToCoords(r.latitude, r.longitude)
+          : { x: 10 + Math.random() * 80, y: 10 + Math.random() * 80 }
+      }));
 
-           // Generate random coords for abstract map placement (10% to 90%) since we don't get exact screen XY
-           const randX = 10 + Math.random() * 80;
-           const randY = 10 + Math.random() * 80;
-
-           parsedRestaurants.push({
-             id: `ai-${Date.now()}-${index}`,
-             name: name,
-             type: parts[1], 
-             cuisine_types: [parts[1]],
-             price_level: parseInt(parts[2]) || 2,
-             rating: parseFloat(parts[3]) || 4.5,
-             address: parts[4],
-             description: parts[5],
-             reviews_count: Math.floor(Math.random() * 500) + 50, // Mock count
-             photo_url: `https://picsum.photos/seed/${name.replace(/ /g, '')}/400/300`,
-             coords: { x: randX, y: randY },
-             occasions: ['Casual'], 
-             phone: '',
-             website: '',
-             distance: '1.2km', 
-             google_maps_url: mapsUrl
-           });
-         }
-      });
-      
-      setAiRestaurants(parsedRestaurants);
-      setHasSearched(true);
-
-    } catch (e) {
-      console.error("AI Fetch Error", e);
-      setToastMessage("Erro ao buscar restaurantes com IA");
+      setRestaurants(transformed);
+    } catch (err) {
+      console.error('Fetch error:', err);
     } finally {
-      setLoadingAi(false);
+      setLoading(false);
     }
   };
 
-  // Initial fetch on mount
+  // Initial fetch
   useEffect(() => {
-    if (!hasSearched) {
-      fetchRestaurantsFromAI("");
-    }
+    fetchRestaurants();
   }, []);
 
-  // Derived State: Filtered Restaurants
+  // Refetch when filters change
+  useEffect(() => {
+    fetchRestaurants();
+  }, [filters.city, filters.prices]);
+
+  // Client-side filtering (cuisines, rating, search)
   const displayRestaurants = useMemo(() => {
-    if (aiRestaurants.length > 0) return aiRestaurants;
-    
-    // Fallback to local filtering of mocks
-    let res = MOCK_RESTAURANTS;
+    let result = restaurants;
+
+    // Search filter
     if (searchQuery) {
       const lower = searchQuery.toLowerCase();
-      res = res.filter(r => r.name.toLowerCase().includes(lower) || (r.type && r.type.toLowerCase().includes(lower)));
+      result = result.filter(r => 
+        r.name.toLowerCase().includes(lower) || 
+        r.neighborhood?.toLowerCase().includes(lower) ||
+        r.cuisine_types?.some(c => c.toLowerCase().includes(lower))
+      );
     }
-    return res;
-  }, [aiRestaurants, searchQuery, filters]); 
 
-  // Derived State: Filtered Profiles
+    // Cuisine filter
+    if (filters.cuisines.length > 0) {
+      result = result.filter(r => 
+        r.cuisine_types?.some(c => filters.cuisines.includes(c))
+      );
+    }
+
+    // Rating filter (se tiver no futuro - por agora não temos rating no seed)
+    if (filters.minRating > 0) {
+      result = result.filter(r => (r.rating || 0) >= filters.minRating);
+    }
+
+    return result;
+  }, [restaurants, searchQuery, filters.cuisines, filters.minRating]);
+
+  // Filtered Profiles
   const filteredUsers = useMemo(() => {
     if (!searchQuery) return MOCK_USERS; 
     const lower = searchQuery.toLowerCase();
@@ -426,34 +373,20 @@ export const Discover: React.FC = () => {
 
   const activeFiltersCount = 
     filters.cuisines.length + 
-    filters.occasions.length + 
     (filters.minRating > 0 ? 1 : 0) + 
     filters.prices.length + 
-    (filters.maxDistance < 50 ? 1 : 0) +
-    filters.dietary.length;
-
-  const handleSearch = () => {
-    if (viewMode === 'restaurants') {
-      fetchRestaurantsFromAI(searchQuery);
-    }
-  };
+    (filters.city ? 1 : 0);
 
   return (
     <div className="h-screen bg-cream flex flex-col overflow-hidden relative">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       
-      {/* Toast Notification */}
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       
-      {/* Modals */}
       <FilterModal 
         isOpen={showFilters} 
         onClose={() => setShowFilters(false)} 
-        onApply={(newFilters) => {
-           setFilters(newFilters);
-           // Re-trigger AI search with new filters
-           setTimeout(() => fetchRestaurantsFromAI(searchQuery), 100);
-        }}
+        onApply={setFilters}
         currentFilters={filters}
       />
       <RestaurantDetailsModal 
@@ -471,13 +404,13 @@ export const Discover: React.FC = () => {
           
           <div className="flex items-center p-1 bg-white rounded-full shadow-md border border-black/5 flex-1 max-w-[240px]">
              <button 
-               onClick={() => { setViewMode('restaurants'); }}
+               onClick={() => setViewMode('restaurants')}
                className={`flex-1 py-2 px-4 rounded-full text-sm font-bold transition-all ${viewMode === 'restaurants' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
              >
                Restaurantes
              </button>
              <button 
-               onClick={() => { setViewMode('profiles'); }}
+               onClick={() => setViewMode('profiles')}
                className={`flex-1 py-2 px-4 rounded-full text-sm font-bold transition-all ${viewMode === 'profiles' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
              >
                Perfis
@@ -499,23 +432,22 @@ export const Discover: React.FC = () => {
               )}
             </button>
           )}
-          {viewMode === 'profiles' && <div className="size-10" />} {/* Spacer */}
+          {viewMode === 'profiles' && <div className="size-10" />}
         </div>
         
         {/* Search Bar */}
-        <div className="mt-4 bg-white rounded-full shadow-lg flex items-center p-3 gap-3 animate-slide-down">
+        <div className="mt-4 bg-white rounded-full shadow-lg flex items-center p-3 gap-3">
           <span className="material-symbols-outlined text-gray-400 ml-1">search</span>
           <input 
             className="flex-1 bg-transparent border-none outline-none text-sm text-dark placeholder-gray-400 focus:ring-0 p-0" 
-            placeholder={viewMode === 'restaurants' ? "Buscar restaurantes (IA)..." : "Buscar pessoas..."} 
+            placeholder={viewMode === 'restaurants' ? "Buscar restaurantes..." : "Buscar pessoas..."} 
             type="text" 
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
           {searchQuery && (
-            <button onClick={() => { setSearchQuery(''); handleSearch(); }} className="text-gray-400 hover:text-dark">
-               <span className="material-symbols-outlined text--[18px]">close</span>
+            <button onClick={() => setSearchQuery('')} className="text-gray-400 hover:text-dark">
+               <span className="material-symbols-outlined text-[18px]">close</span>
             </button>
           )}
         </div>
@@ -524,8 +456,8 @@ export const Discover: React.FC = () => {
       {/* Map Content (Restaurants Mode) */}
       {viewMode === 'restaurants' && (
         <div className="absolute inset-0 z-0 bg-[#E5E5D0] overflow-hidden">
-          {/* Abstract Map UI Layer */}
           <div className="absolute inset-0 pointer-events-auto cursor-move">
+             {/* Grid Background */}
              <svg className="absolute w-full h-full opacity-30 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
                 <defs>
                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -537,16 +469,28 @@ export const Discover: React.FC = () => {
                 <path d="M50,400 Q150,200 300,300 T600,600" fill="none" stroke="#FFF" strokeWidth="12" />
              </svg>
              
-             {loadingAi && (
+             {/* Loading State */}
+             {loading && (
                <div className="absolute inset-0 flex items-center justify-center bg-black/10 z-50">
                   <div className="bg-white px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center">
                     <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2" />
-                    <p className="font-bold text-dark text-sm">Buscando com IA...</p>
+                    <p className="font-bold text-dark text-sm">Carregando...</p>
                   </div>
                </div>
              )}
 
-             {/* Pins */}
+             {/* Empty State */}
+             {!loading && displayRestaurants.length === 0 && (
+               <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-center p-6">
+                    <span className="material-symbols-outlined text-6xl text-gray-400 mb-4">restaurant</span>
+                    <p className="text-gray-500 font-medium">Nenhum restaurante encontrado</p>
+                    <p className="text-gray-400 text-sm mt-1">Tente ajustar os filtros</p>
+                  </div>
+               </div>
+             )}
+
+             {/* Restaurant Pins */}
              {displayRestaurants.map(r => (
                <div 
                   key={r.id}
@@ -558,24 +502,24 @@ export const Discover: React.FC = () => {
                   }}
                >
                  <div className="relative transition-transform duration-300 hover:scale-110 active:scale-95">
-                   <div className="bg-dark text-white rounded-none px-0 py-0 flex flex-col items-center shadow-xl border-none z-10 relative">
-                     {/* Custom Pin Shape */}
+                   <div className="bg-dark text-white flex flex-col items-center shadow-xl z-10 relative">
                      <div className="bg-dark text-white size-12 flex items-center justify-center border-2 border-white shadow-lg hover:bg-primary transition-colors">
                         <span className="material-symbols-outlined text-sm">restaurant</span>
                      </div>
-                     {/* Stick */}
                      <div className="w-0.5 h-4 bg-dark"></div>
                    </div>
                  </div>
-                 {/* Label */}
+                 {/* Label on Hover */}
                  <div className="mt-1 bg-white/95 backdrop-blur-sm px-3 py-1.5 rounded-lg shadow-md border border-black/5 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
-                    <span className="text-xs font-bold text-dark whitespace-nowrap">{r.name}</span>
+                    <span className="text-xs font-bold text-dark whitespace-nowrap max-w-[120px] truncate">{r.name}</span>
                     <div className="flex items-center gap-1 text-[10px] text-gray-500">
                         <span>{r.price_level ? '$'.repeat(r.price_level) : '$$'}</span>
-                        <span>•</span>
-                        <span className="flex items-center text-yellow-500">
-                            {r.rating} <span className="material-symbols-outlined text-[10px] filled">star</span>
-                        </span>
+                        {r.neighborhood && (
+                          <>
+                            <span>•</span>
+                            <span>{r.neighborhood}</span>
+                          </>
+                        )}
                     </div>
                  </div>
                </div>
@@ -583,11 +527,10 @@ export const Discover: React.FC = () => {
 
           </div>
           
-          {/* Google Logo Mock */}
-          <div className="absolute bottom-24 left-4 pointer-events-none opacity-50">
-             <span className="text-[10px] font-bold text-gray-500 flex items-center gap-1">
-                <span className="material-symbols-outlined text-[14px]">map</span>
-                POWERED BY GOOGLE MAPS
+          {/* Stats Badge */}
+          <div className="absolute bottom-24 left-4 bg-white/90 backdrop-blur-sm px-3 py-2 rounded-xl shadow-md">
+             <span className="text-xs font-bold text-dark">
+                {displayRestaurants.length} restaurantes
              </span>
           </div>
         </div>
@@ -597,41 +540,34 @@ export const Discover: React.FC = () => {
       {viewMode === 'profiles' && (
         <div className="absolute inset-0 z-0 bg-cream pt-36 px-4 overflow-y-auto pb-24">
            {filteredUsers.length === 0 ? (
-             <div className="flex flex-col items-center justify-center mt-20 text-gray-400">
-               <span className="material-symbols-outlined text-4xl mb-2">person_off</span>
-               <p>Nenhum resultado para '{searchQuery}'</p>
-             </div>
+              <div className="flex flex-col items-center justify-center h-64 text-center">
+                 <span className="material-symbols-outlined text-6xl text-gray-300 mb-2">person_search</span>
+                 <p className="text-gray-400">Nenhum perfil encontrado</p>
+              </div>
            ) : (
-             <div className="space-y-4">
-               {filteredUsers.map(user => (
-                 <div 
-                   key={user.id} 
-                   onClick={() => navigate(`/profile/@${user.username}`)}
-                   className="flex items-center gap-4 p-4 bg-white rounded-2xl shadow-sm border border-black/5 hover:border-primary/20 transition-all cursor-pointer"
-                 >
-                   <img src={user.profile_photo_url} className="size-14 rounded-full object-cover border border-gray-100" alt={user.full_name} />
-                   <div className="flex-1 min-w-0">
-                     <h3 className="font-bold text-dark truncate">{user.full_name}</h3>
-                     <p className="text-sm text-gray-500 truncate">@{user.username}</p>
-                     {/* Mock Mutuals */}
-                     <p className="text-xs text-secondary mt-1 flex items-center gap-1">
-                       <span className="material-symbols-outlined text-[12px]">group</span>
-                       {Math.floor(Math.random() * 10)} seguidores em comum
-                     </p>
-                   </div>
-                   <button 
-                     onClick={(e) => { e.stopPropagation(); /* Follow logic would go here if needed in list */ }}
-                     className="px-4 py-2 bg-black/5 text-dark text-xs font-bold rounded-full hover:bg-black/10 active:scale-95 transition-all"
-                   >
-                     Ver
-                   </button>
-                 </div>
-               ))}
-             </div>
+              <div className="space-y-3">
+                 {filteredUsers.map(user => (
+                    <button 
+                       key={user.id}
+                       onClick={() => navigate(`/profile/${user.username}`)}
+                       className="w-full bg-white rounded-2xl p-4 shadow-sm border border-black/5 flex items-center gap-4 hover:shadow-md transition-shadow text-left"
+                    >
+                       <img src={user.profile_photo_url} className="size-14 rounded-full object-cover" alt={user.full_name} />
+                       <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                             <span className="font-bold text-dark truncate">{user.full_name}</span>
+                             {user.is_verified && <span className="material-symbols-outlined text-primary text-sm filled">verified</span>}
+                          </div>
+                          <p className="text-sm text-gray-500 truncate">@{user.username}</p>
+                          <p className="text-xs text-gray-400 mt-1">{user.reviews_count} reviews • {user.followers_count} seguidores</p>
+                       </div>
+                       <span className="material-symbols-outlined text-gray-300">chevron_right</span>
+                    </button>
+                 ))}
+              </div>
            )}
         </div>
       )}
-
     </div>
   );
 };
