@@ -1,634 +1,618 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sidebar } from '../components/Navigation';
-import { CUISINE_OPTIONS, DEFAULT_AVATAR, DEFAULT_RESTAURANT } from '../constants';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import { useAppContext } from '../AppContext';
 import { Restaurant, User } from '../types';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
-import { useAppContext } from '../AppContext';
+import { Sidebar } from '../components/Navigation';
+import { DEFAULT_AVATAR, DEFAULT_RESTAURANT, CUISINE_OPTIONS } from '../constants';
 
-// --- BOUNDING BOX GRANDE RECIFE + INTERIOR PE ---
-const MAP_BOUNDS = {
-  minLat: -8.9,
-  maxLat: -7.9,
-  minLng: -36.1,
-  maxLng: -34.8
-};
+// Fix for default markers not showing
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
 
-function latLngToCoords(lat: number, lng: number): { x: number; y: number } {
-  const x = 5 + ((lng - MAP_BOUNDS.minLng) / (MAP_BOUNDS.maxLng - MAP_BOUNDS.minLng)) * 90;
-  const y = 5 + ((MAP_BOUNDS.maxLat - lat) / (MAP_BOUNDS.maxLat - MAP_BOUNDS.minLat)) * 90;
-  return { 
-    x: Math.max(5, Math.min(95, x)), 
-    y: Math.max(5, Math.min(95, y)) 
-  };
-}
-
-// --- TOAST COMPONENT ---
-const Toast: React.FC<{ message: string | null; onClose: () => void }> = ({ message, onClose }) => {
-  useEffect(() => {
-    if (message) {
-      const timer = setTimeout(onClose, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [message, onClose]);
-
-  if (!message) return null;
-
-  return (
-    <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[60] animate-slide-up">
-      <div className="bg-dark/90 backdrop-blur-md text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-3 border border-white/10">
-        <span className="material-symbols-outlined text-green-400 filled">check_circle</span>
-        <span className="font-bold text-sm">{message}</span>
-      </div>
+// Custom restaurant marker icon
+const createRestaurantIcon = () => new L.DivIcon({
+  className: 'custom-restaurant-marker',
+  html: `
+    <div style="
+      background: #D64541;
+      width: 40px;
+      height: 40px;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      border: 3px solid white;
+    ">
+      <span style="
+        transform: rotate(45deg);
+        font-size: 18px;
+      ">🍽️</span>
     </div>
-  );
-};
+  `,
+  iconSize: [40, 40],
+  iconAnchor: [20, 40],
+  popupAnchor: [0, -40],
+});
 
-// --- FILTER INTERFACE & MODAL ---
-interface FilterState {
-  cuisines: string[];
-  occasions: string[];
-  minRating: number;
-  prices: string[];
-  maxDistance: number;
-  dietary: string[];
-  city: string;
-}
-
-const CITIES = [
-  { value: '', label: 'Todas as cidades' },
-  { value: 'Recife', label: 'Recife' },
-  { value: 'Olinda', label: 'Olinda' },
-  { value: 'Jaboatão dos Guararapes', label: 'Jaboatão' },
-  { value: 'Cabo de Santo Agostinho', label: 'Cabo (Paiva/Candeias)' },
-  { value: 'Gravatá', label: 'Gravatá' },
-  { value: 'Caruaru', label: 'Caruaru' },
-  { value: 'Tamandaré', label: 'Tamandaré (Carneiros)' },
-  { value: 'Ipojuca', label: 'Ipojuca (Muro Alto)' },
-];
-
-const FilterModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  onApply: (filters: FilterState) => void;
-  currentFilters: FilterState;
-}> = ({ isOpen, onClose, onApply, currentFilters }) => {
-  const [selectedCuisines, setSelectedCuisines] = useState<string[]>(currentFilters.cuisines);
-  const [selectedOccasions, setSelectedOccasions] = useState<string[]>(currentFilters.occasions);
-  const [minRating, setMinRating] = useState(currentFilters.minRating);
-  const [selectedPrices, setSelectedPrices] = useState<string[]>(currentFilters.prices);
-  const [maxDistance, setMaxDistance] = useState(currentFilters.maxDistance);
-  const [selectedDietary, setSelectedDietary] = useState<string[]>(currentFilters.dietary);
-  const [selectedCity, setSelectedCity] = useState(currentFilters.city);
-
-  useEffect(() => {
-    if (isOpen) {
-      setSelectedCuisines(currentFilters.cuisines);
-      setSelectedOccasions(currentFilters.occasions);
-      setMinRating(currentFilters.minRating);
-      setSelectedPrices(currentFilters.prices);
-      setMaxDistance(currentFilters.maxDistance);
-      setSelectedDietary(currentFilters.dietary);
-      setSelectedCity(currentFilters.city);
-    }
-  }, [isOpen, currentFilters]);
-
-  if (!isOpen) return null;
-
-  const toggleCuisine = (c: string) => {
-    setSelectedCuisines(prev => prev.includes(c) ? prev.filter(i => i !== c) : [...prev, c]);
-  };
-
-  const togglePrice = (p: string) => {
-    setSelectedPrices(prev => prev.includes(p) ? prev.filter(i => i !== p) : [...prev, p]);
-  };
-
-  const handleApply = () => {
-    onApply({ 
-      cuisines: selectedCuisines, 
-      occasions: selectedOccasions, 
-      minRating,
-      prices: selectedPrices,
-      maxDistance,
-      dietary: selectedDietary,
-      city: selectedCity
-    });
-    onClose();
-  };
-
-  const handleClear = () => {
-    const cleared: FilterState = { 
-      cuisines: [], 
-      occasions: [], 
-      minRating: 0,
-      prices: [],
-      maxDistance: 50,
-      dietary: [],
-      city: ''
-    };
-    setSelectedCuisines([]);
-    setSelectedOccasions([]);
-    setMinRating(0);
-    setSelectedPrices([]);
-    setMaxDistance(50);
-    setSelectedDietary([]);
-    setSelectedCity('');
-    onApply(cleared);
-    onClose();
-  };
-
-  const ratingOptions = [
-    { value: 0, label: 'Todos' },
-    { value: 4.0, label: '4.0+' },
-    { value: 4.5, label: '4.5+' },
-    { value: 4.8, label: '4.8+' }
-  ];
-
-  // Get cuisine labels from CUISINE_OPTIONS (array of {label, icon})
-  const cuisineLabels = CUISINE_OPTIONS.map(c => c.label);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-dark rounded-3xl w-full max-w-sm max-h-[85vh] shadow-2xl flex flex-col overflow-hidden text-cream border border-gray-800">
-        
-        <div className="flex justify-between items-center p-5 border-b border-white/10">
-          <h3 className="text-xl font-bold">Filtros</h3>
-          <button onClick={onClose} className="size-8 flex items-center justify-center rounded-full hover:bg-white/10">
-             <span className="material-symbols-outlined text-white">close</span>
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-8 no-scrollbar">
-          
-          {/* City Filter */}
-          <div>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Cidade</h4>
-            <select 
-              value={selectedCity}
-              onChange={(e) => setSelectedCity(e.target.value)}
-              className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white"
-            >
-              {CITIES.map(c => (
-                <option key={c.value} value={c.value} className="bg-dark">{c.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Cuisine */}
-          <div>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Tipo de cozinha</h4>
-            <div className="flex flex-wrap gap-2">
-              {cuisineLabels.slice(0, 12).map(c => (
-                <button 
-                  key={c}
-                  onClick={() => toggleCuisine(c)}
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    selectedCuisines.includes(c) 
-                      ? 'bg-primary text-white border-primary' 
-                      : 'bg-transparent text-gray-300 border-gray-600 hover:border-gray-400'
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Rating */}
-          <div>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Avaliação mínima</h4>
-            <div className="flex gap-2">
-              {ratingOptions.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => setMinRating(opt.value)}
-                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    minRating === opt.value 
-                      ? 'bg-primary text-white border-primary' 
-                      : 'bg-transparent text-gray-300 border-gray-600'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Price */}
-          <div>
-            <h4 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-3">Faixa de preço</h4>
-            <div className="flex gap-2">
-              {['$', '$$', '$$$', '$$$$'].map((p, i) => (
-                <button
-                  key={p}
-                  onClick={() => togglePrice(String(i + 1))}
-                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    selectedPrices.includes(String(i + 1))
-                      ? 'bg-primary text-white border-primary' 
-                      : 'bg-transparent text-gray-300 border-gray-600'
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </div>
-
-        </div>
-
-        <div className="p-5 border-t border-white/10 flex gap-4 bg-dark">
-          <button onClick={handleClear} className="flex-1 py-3 rounded-xl border border-white/20 text-white font-bold hover:bg-white/5">
-            Limpar
-          </button>
-          <button onClick={handleApply} className="flex-1 py-3 rounded-xl bg-primary text-white font-bold shadow-lg shadow-primary/20">
-            Aplicar
-          </button>
-        </div>
-      </div>
+// User location marker
+const createUserLocationIcon = () => new L.DivIcon({
+  className: 'custom-user-marker',
+  html: `
+    <div style="position: relative;">
+      <div style="
+        background: #4285F4;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 3px solid white;
+        box-shadow: 0 2px 10px rgba(66,133,244,0.5);
+      "></div>
+      <div style="
+        position: absolute;
+        top: -6px;
+        left: -6px;
+        width: 30px;
+        height: 30px;
+        background: rgba(66,133,244,0.25);
+        border-radius: 50%;
+        animation: userPulse 2s infinite;
+      "></div>
     </div>
-  );
-};
+  `,
+  iconSize: [18, 18],
+  iconAnchor: [9, 9],
+});
 
+// Component to handle map events
+const MapController: React.FC<{
+  onBoundsChange?: (bounds: L.LatLngBounds) => void;
+}> = ({ onBoundsChange }) => {
+  const map = useMap();
 
-// --- MAIN DISCOVER SCREEN ---
-export const Discover: React.FC = () => {
-  const navigate = useNavigate();
-  const { supabase } = useAppContext();
-  
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'restaurants' | 'profiles'>('restaurants');
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  // Restaurants from Supabase
-  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
-  const [loadingRestaurants, setLoadingRestaurants] = useState(true);
-  
-  // Profiles from Supabase
-  const [profiles, setProfiles] = useState<User[]>([]);
-  const [loadingProfiles, setLoadingProfiles] = useState(false);
-  
-  // Modals & Feedback
-  const [showFilters, setShowFilters] = useState(false);
-  const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Filter State
-  const [filters, setFilters] = useState<FilterState>({
-    cuisines: [],
-    occasions: [],
-    minRating: 0,
-    prices: [],
-    maxDistance: 50,
-    dietary: [],
-    city: ''
+  useMapEvents({
+    moveend() {
+      if (onBoundsChange) {
+        onBoundsChange(map.getBounds());
+      }
+    },
   });
 
-  // Fetch restaurants from Supabase
+  return null;
+};
+
+export const Discover: React.FC = () => {
+  const navigate = useNavigate();
+  const { supabase, currentUser } = useAppContext();
+  const mapRef = useRef<L.Map | null>(null);
+  
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'restaurants' | 'profiles'>('restaurants');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  
+  // Restaurant state
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [filteredRestaurants, setFilteredRestaurants] = useState<Restaurant[]>([]);
+  const [loadingRestaurants, setLoadingRestaurants] = useState(true);
+  const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  
+  // Map state - Recife center
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const mapCenter: [number, number] = [-8.0476, -34.8770];
+  
+  // Filters
+  const [filters, setFilters] = useState({
+    cuisine: '',
+    priceLevel: 0,
+    minRating: 0
+  });
+  
+  // Profile search state
+  const [profiles, setProfiles] = useState<User[]>([]);
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
+
+  // Fetch restaurants on mount
+  useEffect(() => {
+    fetchRestaurants();
+    getUserLocation();
+  }, []);
+
+  const getUserLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setUserLocation([pos.coords.latitude, pos.coords.longitude]);
+        },
+        () => {} // Silently fail
+      );
+    }
+  };
+
+  // Filter restaurants when search or filters change
+  useEffect(() => {
+    let filtered = [...restaurants];
+    
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(r => 
+        r.name.toLowerCase().includes(query) ||
+        r.neighborhood?.toLowerCase().includes(query) ||
+        r.cuisine_types?.some(c => c.toLowerCase().includes(query))
+      );
+    }
+    
+    if (filters.cuisine) {
+      filtered = filtered.filter(r => 
+        r.cuisine_types?.some(c => c.toLowerCase() === filters.cuisine.toLowerCase())
+      );
+    }
+    
+    if (filters.priceLevel > 0) {
+      filtered = filtered.filter(r => r.price_level === filters.priceLevel);
+    }
+    
+    if (filters.minRating > 0) {
+      filtered = filtered.filter(r => (r.rating || 0) >= filters.minRating);
+    }
+    
+    setFilteredRestaurants(filtered);
+  }, [restaurants, searchQuery, filters]);
+
   const fetchRestaurants = async () => {
     setLoadingRestaurants(true);
     try {
-      let query = supabase
+      const { data, error } = await supabase
         .from('restaurants')
         .select('*')
         .eq('is_active', true)
-        .order('name');
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null);
 
-      if (filters.city) {
-        query = query.eq('city', filters.city);
-      }
-
-      if (filters.prices.length > 0) {
-        query = query.in('price_level', filters.prices.map(p => parseInt(p)));
-      }
-
-      const { data, error } = await query.limit(100);
-
-      if (error) {
-        console.error('Error fetching restaurants:', error);
-        setToastMessage('Erro ao carregar restaurantes');
-        return;
-      }
-
-      const transformed = (data || []).map(r => ({
-        ...r,
-        coords: r.latitude && r.longitude 
-          ? latLngToCoords(r.latitude, r.longitude)
-          : { x: 10 + Math.random() * 80, y: 10 + Math.random() * 80 }
-      }));
-
-      setRestaurants(transformed);
+      if (error) throw error;
+      setRestaurants(data || []);
+      setFilteredRestaurants(data || []);
     } catch (err) {
-      console.error('Fetch error:', err);
+      // Silent fail
     } finally {
       setLoadingRestaurants(false);
     }
   };
 
-  // Fetch profiles from Supabase
-  const fetchProfiles = async (query?: string) => {
+  // Profile search with debounce
+  useEffect(() => {
+    if (activeTab !== 'profiles') return;
+    
+    const timer = setTimeout(() => {
+      if (searchQuery.length >= 2) {
+        searchProfiles(searchQuery);
+      } else if (searchQuery.length === 0) {
+        setProfiles([]);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeTab]);
+
+  const searchProfiles = async (query: string) => {
     setLoadingProfiles(true);
     try {
-      let dbQuery = supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('is_banned', false)
-        .order('full_name');
+        .or(`full_name.ilike.%${query}%,username.ilike.%${query}%`)
+        .limit(20);
 
-      if (query && query.length >= 2) {
-        dbQuery = dbQuery.or(`full_name.ilike.%${query}%,username.ilike.%${query}%`);
-      }
-
-      const { data, error } = await dbQuery.limit(50);
-
-      if (error) {
-        console.error('Error fetching profiles:', error);
-        return;
-      }
-
-      // Fetch counts for each profile
-      const profilesWithCounts = await Promise.all((data || []).map(async (profile) => {
-        const [reviewsRes, followersRes] = await Promise.all([
-          supabase.from('reviews').select('*', { count: 'exact', head: true }).eq('user_id', profile.id).eq('is_active', true),
-          supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', profile.id)
-        ]);
-
-        return {
-          ...profile,
-          reviews_count: reviewsRes.count || 0,
-          followers_count: followersRes.count || 0
-        };
-      }));
-
-      setProfiles(profilesWithCounts);
+      if (error) throw error;
+      setProfiles(data || []);
     } catch (err) {
-      console.error('Fetch profiles error:', err);
+      // Silent fail
     } finally {
       setLoadingProfiles(false);
     }
   };
 
-  // Initial fetch
-  useEffect(() => {
-    fetchRestaurants();
-    fetchProfiles();
-  }, []);
-
-  // Refetch restaurants when filters change
-  useEffect(() => {
-    fetchRestaurants();
-  }, [filters.city, filters.prices]);
-
-  // Search profiles with debounce
-  useEffect(() => {
-    if (viewMode !== 'profiles') return;
-    
-    const timer = setTimeout(() => {
-      fetchProfiles(searchQuery);
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, viewMode]);
-
-  // Client-side filtering for restaurants
-  const displayRestaurants = useMemo(() => {
-    let result = restaurants;
-
-    if (searchQuery) {
-      const lower = searchQuery.toLowerCase();
-      result = result.filter(r => 
-        r.name.toLowerCase().includes(lower) || 
-        r.neighborhood?.toLowerCase().includes(lower) ||
-        r.cuisine_types?.some(c => c.toLowerCase().includes(lower))
-      );
+  const flyToUserLocation = () => {
+    if (userLocation && mapRef.current) {
+      mapRef.current.flyTo(userLocation, 15, { duration: 1 });
+    } else {
+      getUserLocation();
     }
+  };
 
-    if (filters.cuisines.length > 0) {
-      result = result.filter(r => 
-        r.cuisine_types?.some(c => filters.cuisines.includes(c))
-      );
+  const clearFilters = () => {
+    setFilters({ cuisine: '', priceLevel: 0, minRating: 0 });
+    setSearchQuery('');
+  };
+
+  const hasActiveFilters = filters.cuisine || filters.priceLevel > 0 || filters.minRating > 0;
+
+  // Toast auto-hide
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 2000);
+      return () => clearTimeout(timer);
     }
-
-    if (filters.minRating > 0) {
-      result = result.filter(r => (r.rating || 0) >= filters.minRating);
-    }
-
-    return result;
-  }, [restaurants, searchQuery, filters.cuisines, filters.minRating]);
-
-  const activeFiltersCount = 
-    filters.cuisines.length + 
-    (filters.minRating > 0 ? 1 : 0) + 
-    filters.prices.length + 
-    (filters.city ? 1 : 0);
+  }, [toastMessage]);
 
   return (
-    <div className="h-screen bg-cream flex flex-col overflow-hidden relative">
+    <div className="min-h-screen bg-cream flex flex-col pb-20">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       
-      <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
-      
-      <FilterModal 
-        isOpen={showFilters} 
-        onClose={() => setShowFilters(false)} 
-        onApply={setFilters}
-        currentFilters={filters}
-      />
+      {/* Toast */}
+      {toastMessage && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[2000] animate-bounce-in">
+          <div className="bg-dark/90 text-white px-6 py-2 rounded-full text-sm font-bold shadow-lg flex items-center gap-2">
+            <span className="material-symbols-outlined text-base filled text-primary">bookmark</span>
+            {toastMessage}
+          </div>
+        </div>
+      )}
+
+      {/* Restaurant Details Modal */}
       <RestaurantDetailsModal 
         restaurant={selectedRestaurant} 
-        onClose={() => setSelectedRestaurant(null)} 
+        onClose={() => setSelectedRestaurant(null)}
         onShowToast={setToastMessage}
       />
 
       {/* Header */}
-      <header className="absolute top-0 left-0 right-0 z-20 p-4 pt-4 pb-2">
-        <div className="flex items-center justify-between gap-4">
-          <button onClick={() => setSidebarOpen(true)} className="flex items-center justify-center size-10 rounded-full bg-white shadow-md hover:bg-gray-50 active:scale-95 transition-transform">
-            <span className="material-symbols-outlined text-[28px]">menu</span>
+      <header className="sticky top-0 z-[1001] bg-cream/95 backdrop-blur-sm border-b border-black/5">
+        <div className="flex items-center justify-between px-4 py-3">
+          <button 
+            onClick={() => setSidebarOpen(true)} 
+            className="size-10 flex items-center justify-center rounded-full bg-white shadow-sm border border-gray-100"
+          >
+            <span className="material-symbols-outlined">menu</span>
           </button>
           
-          <div className="flex items-center p-1 bg-white rounded-full shadow-md border border-black/5 flex-1 max-w-[240px]">
-             <button 
-               onClick={() => setViewMode('restaurants')}
-               className={`flex-1 py-2 px-4 rounded-full text-sm font-bold transition-all ${viewMode === 'restaurants' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
-             >
-               Restaurantes
-             </button>
-             <button 
-               onClick={() => setViewMode('profiles')}
-               className={`flex-1 py-2 px-4 rounded-full text-sm font-bold transition-all ${viewMode === 'profiles' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100'}`}
-             >
-               Perfis
-             </button>
-          </div>
-
-          {viewMode === 'restaurants' && (
-            <button 
-              onClick={() => setShowFilters(true)}
-              className={`flex items-center justify-center size-10 rounded-full shadow-md active:scale-95 transition-all relative ${
-                activeFiltersCount > 0 ? 'bg-primary text-white' : 'bg-white text-primary hover:bg-gray-50'
+          {/* Tab Toggle */}
+          <div className="flex bg-gray-100 rounded-full p-1">
+            <button
+              onClick={() => { setActiveTab('restaurants'); setSearchQuery(''); }}
+              className={`px-4 py-2 rounded-full text-sm font-bold transition-all ${
+                activeTab === 'restaurants' 
+                  ? 'bg-primary text-white shadow-sm' 
+                  : 'text-gray-600'
               }`}
             >
-              <span className={`material-symbols-outlined text-[24px] ${activeFiltersCount > 0 ? 'filled' : ''}`}>tune</span>
-              {activeFiltersCount > 0 && (
-                <span className="absolute -top-1 -right-1 size-4 bg-white text-primary text-[10px] font-bold rounded-full flex items-center justify-center border border-gray-100">
-                  {activeFiltersCount}
-                </span>
-              )}
+              Restaurantes
             </button>
-          )}
-          {viewMode === 'profiles' && <div className="size-10" />}
-        </div>
-        
-        {/* Search Bar */}
-        <div className="mt-4 bg-white rounded-full shadow-lg flex items-center p-3 gap-3">
-          <span className="material-symbols-outlined text-gray-400 ml-1">search</span>
-          <input 
-            className="flex-1 bg-transparent border-none outline-none text-sm text-dark placeholder-gray-400 focus:ring-0 p-0" 
-            placeholder={viewMode === 'restaurants' ? "Buscar restaurantes..." : "Buscar pessoas..."} 
-            type="text" 
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-          />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="text-gray-400 hover:text-dark">
-               <span className="material-symbols-outlined text-[18px]">close</span>
+            <button
+              onClick={() => { setActiveTab('profiles'); setSearchQuery(''); }}
+              className={`px-4 py-2 rounded-full text-sm font-bold transition-all ${
+                activeTab === 'profiles' 
+                  ? 'bg-primary text-white shadow-sm' 
+                  : 'text-gray-600'
+              }`}
+            >
+              Perfis
             </button>
-          )}
-        </div>
-      </header>
-
-      {/* Map Content (Restaurants Mode) */}
-      {viewMode === 'restaurants' && (
-        <div className="absolute inset-0 z-0 bg-[#E5E5D0] overflow-hidden">
-          <div className="absolute inset-0 pointer-events-auto cursor-move">
-             {/* Grid Background */}
-             <svg className="absolute w-full h-full opacity-30 pointer-events-none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                   <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#C8C8B0" strokeWidth="1"/>
-                   </pattern>
-                </defs>
-                <rect width="100%" height="100%" fill="url(#grid)" />
-                <path d="M-100,100 Q200,50 400,200 T900,100" fill="none" stroke="#FFF" strokeWidth="12" />
-                <path d="M50,400 Q150,200 300,300 T600,600" fill="none" stroke="#FFF" strokeWidth="12" />
-             </svg>
-             
-             {/* Loading State */}
-             {loadingRestaurants && (
-               <div className="absolute inset-0 flex items-center justify-center bg-black/10 z-50">
-                  <div className="bg-white px-6 py-4 rounded-2xl shadow-xl flex flex-col items-center">
-                    <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2" />
-                    <p className="font-bold text-dark text-sm">Carregando...</p>
-                  </div>
-               </div>
-             )}
-
-             {/* Empty State */}
-             {!loadingRestaurants && displayRestaurants.length === 0 && (
-               <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center p-6">
-                    <span className="material-symbols-outlined text-6xl text-gray-400 mb-4">restaurant</span>
-                    <p className="text-gray-500 font-medium">Nenhum restaurante encontrado</p>
-                    <p className="text-gray-400 text-sm mt-1">Tente ajustar os filtros</p>
-                  </div>
-               </div>
-             )}
-
-             {/* Restaurant Pins */}
-             {displayRestaurants.map(r => (
-               <div 
-                  key={r.id}
-                  className="absolute transform -translate-x-1/2 -translate-y-full flex flex-col items-center cursor-pointer group z-10 hover:z-20 transition-all duration-300 pointer-events-auto"
-                  style={{ top: `${r.coords?.y || 50}%`, left: `${r.coords?.x || 50}%` }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedRestaurant(r);
-                  }}
-               >
-                 <div className="relative transition-transform duration-300 hover:scale-110 active:scale-95">
-                   <div className="bg-dark text-white flex flex-col items-center shadow-xl z-10 relative">
-                     <div className="bg-dark text-white size-12 flex items-center justify-center border-2 border-white shadow-lg hover:bg-primary transition-colors">
-                        <span className="material-symbols-outlined text-sm">restaurant</span>
-                     </div>
-                     <div className="w-0.5 h-4 bg-dark"></div>
-                   </div>
-                 </div>
-                 {/* Label on Hover */}
-                 <div className="mt-1 bg-white/95 backdrop-blur-sm px-3 py-1.5 rounded-lg shadow-md border border-black/5 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
-                    <span className="text-xs font-bold text-dark whitespace-nowrap max-w-[120px] truncate">{r.name}</span>
-                    <div className="flex items-center gap-1 text-[10px] text-gray-500">
-                        <span>{r.price_level ? '$'.repeat(r.price_level) : '$$'}</span>
-                        {r.neighborhood && (
-                          <>
-                            <span>•</span>
-                            <span>{r.neighborhood}</span>
-                          </>
-                        )}
-                    </div>
-                 </div>
-               </div>
-             ))}
-
           </div>
           
-          {/* Stats Badge */}
-          <div className="absolute bottom-24 left-4 bg-white/90 backdrop-blur-sm px-3 py-2 rounded-xl shadow-md">
-             <span className="text-xs font-bold text-dark">
-                {displayRestaurants.length} restaurantes
-             </span>
+          {/* Filter Button (only for restaurants) */}
+          {activeTab === 'restaurants' ? (
+            <button 
+              onClick={() => setShowFilters(!showFilters)}
+              className={`size-10 flex items-center justify-center rounded-full shadow-sm border transition-all ${
+                hasActiveFilters || showFilters
+                  ? 'bg-primary text-white border-primary' 
+                  : 'bg-white border-gray-100'
+              }`}
+            >
+              <span className="material-symbols-outlined">tune</span>
+            </button>
+          ) : (
+            <div className="size-10" />
+          )}
+        </div>
+
+        {/* Search Bar */}
+        <div className="px-4 pb-3">
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
+              search
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={activeTab === 'restaurants' ? 'Buscar restaurantes...' : 'Buscar perfis...'}
+              className="w-full h-12 pl-12 pr-10 rounded-2xl bg-white border border-gray-100 shadow-sm focus:outline-none focus:border-primary transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <span className="material-symbols-outlined text-xl">close</span>
+              </button>
+            )}
           </div>
+        </div>
+
+        {/* Filters Panel */}
+        {showFilters && activeTab === 'restaurants' && (
+          <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
+            {/* Cuisine Filter */}
+            <div>
+              <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Culinária</label>
+              <select
+                value={filters.cuisine}
+                onChange={(e) => setFilters({ ...filters, cuisine: e.target.value })}
+                className="w-full h-10 px-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none focus:border-primary"
+              >
+                <option value="">Todas</option>
+                {CUISINE_OPTIONS.map(c => (
+                  <option key={c.label} value={c.label}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+            
+            {/* Price & Rating Row */}
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Preço</label>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4].map(level => (
+                    <button
+                      key={level}
+                      onClick={() => setFilters({ ...filters, priceLevel: filters.priceLevel === level ? 0 : level })}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                        filters.priceLevel === level
+                          ? 'bg-primary text-white'
+                          : 'bg-white border border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      {'$'.repeat(level)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="flex-1">
+                <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nota mínima</label>
+                <div className="flex gap-1">
+                  {[3, 4, 4.5].map(rating => (
+                    <button
+                      key={rating}
+                      onClick={() => setFilters({ ...filters, minRating: filters.minRating === rating ? 0 : rating })}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
+                        filters.minRating === rating
+                          ? 'bg-primary text-white'
+                          : 'bg-white border border-gray-200 text-gray-600'
+                      }`}
+                    >
+                      {rating}+
+                      <span className="material-symbols-outlined text-xs filled">star</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Clear Filters */}
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="w-full py-2 text-sm font-bold text-primary hover:bg-primary/5 rounded-xl transition-colors"
+              >
+                Limpar filtros
+              </button>
+            )}
+          </div>
+        )}
+      </header>
+
+      {/* Main Content */}
+      {activeTab === 'restaurants' ? (
+        <div className="flex-1 relative">
+          {loadingRestaurants ? (
+            <div className="flex-1 flex items-center justify-center h-[60vh]">
+              <div className="text-center">
+                <div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                <p className="text-gray-500">Carregando mapa...</p>
+              </div>
+            </div>
+          ) : (
+            <div className="h-[calc(100vh-200px)] relative">
+              <MapContainer
+                center={mapCenter}
+                zoom={13}
+                style={{ height: '100%', width: '100%' }}
+                ref={mapRef}
+                zoomControl={false}
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                
+                <MapController />
+
+                {/* User Location Marker */}
+                {userLocation && (
+                  <Marker position={userLocation} icon={createUserLocationIcon()}>
+                    <Popup>
+                      <div className="text-center py-1 px-2">
+                        <span className="font-bold text-sm">Você está aqui</span>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )}
+
+                {/* Restaurant Markers */}
+                {filteredRestaurants.map(restaurant => (
+                  restaurant.latitude && restaurant.longitude && (
+                    <Marker
+                      key={restaurant.id}
+                      position={[restaurant.latitude, restaurant.longitude]}
+                      icon={createRestaurantIcon()}
+                      eventHandlers={{
+                        click: () => setSelectedRestaurant(restaurant)
+                      }}
+                    >
+                      <Popup>
+                        <div 
+                          className="w-52 cursor-pointer -m-1"
+                          onClick={() => setSelectedRestaurant(restaurant)}
+                        >
+                          <img 
+                            src={restaurant.photo_url || DEFAULT_RESTAURANT}
+                            alt={restaurant.name}
+                            className="w-full h-28 object-cover rounded-xl mb-2"
+                            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
+                          />
+                          <h3 className="font-bold text-dark mb-1 truncate">{restaurant.name}</h3>
+                          <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
+                            {restaurant.rating && (
+                              <span className="flex items-center gap-0.5 bg-yellow-50 px-1.5 py-0.5 rounded-full">
+                                <span className="material-symbols-outlined text-yellow-500 text-xs filled">star</span>
+                                <span className="font-bold text-yellow-700">{restaurant.rating.toFixed(1)}</span>
+                              </span>
+                            )}
+                            {restaurant.price_level && (
+                              <span className="text-green-600 font-bold">{'$'.repeat(restaurant.price_level)}</span>
+                            )}
+                            {restaurant.cuisine_types?.[0] && (
+                              <span className="truncate bg-gray-100 px-1.5 py-0.5 rounded-full">{restaurant.cuisine_types[0]}</span>
+                            )}
+                          </div>
+                          {restaurant.neighborhood && (
+                            <p className="text-xs text-gray-400 truncate flex items-center gap-1">
+                              <span className="material-symbols-outlined text-xs">location_on</span>
+                              {restaurant.neighborhood}
+                            </p>
+                          )}
+                          <button className="w-full mt-2 py-1.5 bg-primary text-white text-xs font-bold rounded-lg hover:bg-primary/90 transition-colors">
+                            Ver detalhes
+                          </button>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )
+                ))}
+              </MapContainer>
+
+              {/* My Location Button */}
+              <button
+                onClick={flyToUserLocation}
+                className="absolute bottom-20 right-4 z-[1000] bg-white rounded-full p-3 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95 transition-all"
+                title="Minha localização"
+              >
+                <span className="material-symbols-outlined text-primary">my_location</span>
+              </button>
+
+              {/* Restaurant Count Badge */}
+              <div className="absolute bottom-4 left-4 z-[1000] bg-white px-4 py-2 rounded-full shadow-lg border border-gray-100">
+                <span className="font-bold text-dark">{filteredRestaurants.length} restaurantes</span>
+              </div>
+
+              {/* Zoom Controls */}
+              <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-1">
+                <button
+                  onClick={() => mapRef.current?.zoomIn()}
+                  className="bg-white rounded-lg p-2 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95 transition-all"
+                >
+                  <span className="material-symbols-outlined">add</span>
+                </button>
+                <button
+                  onClick={() => mapRef.current?.zoomOut()}
+                  className="bg-white rounded-lg p-2 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95 transition-all"
+                >
+                  <span className="material-symbols-outlined">remove</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Profiles Tab */
+        <div className="flex-1 px-4 py-4">
+          {loadingProfiles ? (
+            <div className="flex justify-center py-10">
+              <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : profiles.length === 0 ? (
+            <div className="text-center py-16 text-gray-400">
+              <span className="material-symbols-outlined text-5xl mb-3 opacity-30">person_search</span>
+              <p className="font-medium">
+                {searchQuery.length < 2 
+                  ? 'Digite pelo menos 2 caracteres para buscar' 
+                  : 'Nenhum perfil encontrado'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {profiles.map(user => (
+                <button
+                  key={user.id}
+                  onClick={() => navigate(`/profile/${user.username}`)}
+                  className="w-full flex items-center gap-3 p-3 bg-white rounded-2xl shadow-sm border border-gray-100 hover:border-primary/30 transition-all active:scale-[0.98]"
+                >
+                  <img
+                    src={user.profile_photo_url || DEFAULT_AVATAR}
+                    alt={user.full_name}
+                    className="size-12 rounded-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR; }}
+                  />
+                  <div className="flex-1 text-left min-w-0">
+                    <div className="flex items-center gap-1">
+                      <h3 className="font-bold text-dark truncate">{user.full_name}</h3>
+                      {user.is_verified && (
+                        <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-500">@{user.username}</p>
+                  </div>
+                  <span className="material-symbols-outlined text-gray-300">chevron_right</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Profiles View Mode */}
-      {viewMode === 'profiles' && (
-        <div className="absolute inset-0 z-0 bg-cream pt-36 px-4 overflow-y-auto pb-24">
-           {loadingProfiles ? (
-              <div className="flex flex-col items-center justify-center h-64">
-                 <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2" />
-                 <p className="text-gray-400 text-sm">Carregando perfis...</p>
-              </div>
-           ) : profiles.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                 <span className="material-symbols-outlined text-6xl text-gray-300 mb-2">person_search</span>
-                 <p className="text-gray-400">Nenhum perfil encontrado</p>
-              </div>
-           ) : (
-              <div className="space-y-3">
-                 {profiles.map(user => (
-                    <button 
-                       key={user.id}
-                       onClick={() => navigate(`/profile/${user.username}`)}
-                       className="w-full bg-white rounded-2xl p-4 shadow-sm border border-black/5 flex items-center gap-4 hover:shadow-md transition-shadow text-left"
-                    >
-                       <img 
-                         src={user.profile_photo_url || DEFAULT_AVATAR} 
-                         className="size-14 rounded-full object-cover" 
-                         alt={user.full_name}
-                         onError={(e) => {
-                           (e.target as HTMLImageElement).src = DEFAULT_AVATAR;
-                         }}
-                       />
-                       <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                             <span className="font-bold text-dark truncate">{user.full_name}</span>
-                             {user.is_verified && (
-  <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
-)}
-                          </div>
-                          <p className="text-sm text-gray-500 truncate">@{user.username}</p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            {user.reviews_count || 0} reviews • {user.followers_count || 0} seguidores
-                          </p>
-                       </div>
-                       <span className="material-symbols-outlined text-gray-300">chevron_right</span>
-                    </button>
-                 ))}
-              </div>
-           )}
-        </div>
-      )}
+      {/* CSS for animations and Leaflet customization */}
+      <style>{`
+        @keyframes userPulse {
+          0% { transform: scale(1); opacity: 0.6; }
+          100% { transform: scale(2.5); opacity: 0; }
+        }
+        .leaflet-popup-content-wrapper {
+          border-radius: 16px !important;
+          padding: 0 !important;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.15) !important;
+        }
+        .leaflet-popup-content {
+          margin: 12px !important;
+        }
+        .leaflet-popup-tip {
+          background: white !important;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+        }
+        .leaflet-container {
+          font-family: inherit !important;
+        }
+        .custom-restaurant-marker {
+          background: transparent !important;
+          border: none !important;
+        }
+        .custom-user-marker {
+          background: transparent !important;
+          border: none !important;
+        }
+      `}</style>
     </div>
   );
 };
