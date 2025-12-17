@@ -390,13 +390,11 @@ export const Register: React.FC = () => {
     }
 
     setUsernameStatus('checking');
-console.log('🔍 Verificando username via RPC:', formData.username); // ADICIONE ISSO
 
 try {
   const { data, error } = await supabase.rpc('check_username_available', {
     target_username: formData.username
   });
-  console.log('📦 Resposta RPC:', { data, error }); 
 
       if (error) {
         console.error('Username check error:', error);
