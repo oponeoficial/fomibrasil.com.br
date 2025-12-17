@@ -398,7 +398,7 @@ export const Register: React.FC = () => {
 
       if (error) {
         console.error('Username check error:', error);
-        setUsernameStatus('available'); // Fail open
+        setUsernameStatus('available');
       } else {
         setUsernameStatus(data ? 'available' : 'taken');
       }
