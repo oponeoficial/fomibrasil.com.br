@@ -24,49 +24,27 @@ export const Login: React.FC = () => {
     setErrorMessage('');
     setIsLoading(true);
 
-    console.log('[Login] Iniciando login com:', identifier);
-
     try {
       const isEmail = identifier.includes('@');
       let email = identifier;
 
       // Se for username, buscar o email associado
       if (!isEmail) {
-        console.log('[Login] Buscando email pelo username:', identifier.toLowerCase());
-        
         const { data: profile, error } = await supabase
           .from('profiles')
           .select('email')
           .eq('username', identifier.toLowerCase())
           .maybeSingle();
 
-        console.log('[Login] Resultado busca profile:', { profile, error });
-
-        if (error) {
-          console.error('[Login] Erro ao buscar profile:', error);
-          setErrorMessage('Erro ao buscar usuário');
+        if (error || !profile?.email) {
+          setErrorMessage(error ? 'Erro ao buscar usuário' : 'Usuário não encontrado');
           setIsLoading(false);
           return;
         }
-
-        if (!profile?.email) {
-          setErrorMessage('Usuário não encontrado');
-          setIsLoading(false);
-          return;
-        }
-        
         email = profile.email;
-        console.log('[Login] Email encontrado:', email);
       }
 
-      console.log('[Login] Tentando signInWithPassword com email:', email);
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
-      console.log('[Login] Resultado auth:', { data, error });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
         if (error.message.includes('Email not confirmed')) {
@@ -81,25 +59,16 @@ export const Login: React.FC = () => {
       }
 
       if (data.user) {
-        console.log('[Login] Usuário autenticado:', data.user.id);
-        
-        // Verificar se completou onboarding
+        // Buscar onboarding status - já autenticado, pode redirecionar
         const { data: profile } = await supabase
           .from('profiles')
           .select('onboarding_completed')
           .eq('id', data.user.id)
-          .maybeSingle();
+          .single();
 
-        console.log('[Login] Onboarding status:', profile?.onboarding_completed);
-
-        if (!profile?.onboarding_completed) {
-          navigate('/onboarding');
-        } else {
-          navigate('/feed');
-        }
+        navigate(profile?.onboarding_completed ? '/feed' : '/onboarding');
       }
-    } catch (err) {
-      console.error('[Login] Erro catch:', err);
+    } catch {
       setErrorMessage('Erro ao fazer login. Tente novamente.');
     } finally {
       setIsLoading(false);
@@ -430,7 +399,6 @@ export const Register: React.FC = () => {
           .maybeSingle();
 
         if (error) {
-          console.error('Username check error:', error);
           setUsernameStatus('available');
         } else if (data) {
           setUsernameStatus('taken');
@@ -543,7 +511,6 @@ export const Register: React.FC = () => {
             break;
         }
 
-        console.error("Geolocation Error:", { code: error.code, message: error.message });
         alert(`${errorMessage}\nDetalhe: ${detail}`);
       },
       options
@@ -617,7 +584,7 @@ export const Register: React.FC = () => {
           .eq('id', authData.user.id);
 
         if (profileError) {
-          console.error('Profile update error:', profileError);
+          // Profile update failed silently - user can update later
         }
 
         // 3. Mostrar modal de sucesso
