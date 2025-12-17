@@ -1,29 +1,10 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapContainer, TileLayer, Marker, useMap, Circle } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { useAppContext } from '../AppContext';
 import { Restaurant, User } from '../types';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
 import { Sidebar } from '../components/Navigation';
-import { DEFAULT_AVATAR, CUISINE_OPTIONS } from '../constants';
-
-// Restaurant marker - simple PNG icon (GPU accelerated, much lighter than DivIcon)
-const restaurantIcon = new L.Icon({
-  iconUrl: 'https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/svg/map-marker.svg',
-  iconSize: [32, 32],
-  iconAnchor: [16, 32],
-  className: 'restaurant-marker'
-});
-
-// User location marker
-const userIcon = new L.Icon({
-  iconUrl: 'https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/svg/circle-slice-8.svg',
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-  className: 'user-marker'
-});
+import { DEFAULT_AVATAR, DEFAULT_RESTAURANT, CUISINE_OPTIONS } from '../constants';
 
 // Calculate distance (Haversine)
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -36,69 +17,51 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 };
 
-// Map controller component
-const MapController: React.FC<{
-  userLocation: [number, number] | null;
-  onMoveEnd?: (bounds: L.LatLngBounds) => void;
-}> = ({ userLocation, onMoveEnd }) => {
-  const map = useMap();
-
-  useEffect(() => {
-    if (userLocation) {
-      map.setView(userLocation, 14);
-    }
-  }, []);
-
-  useEffect(() => {
-    const handleMoveEnd = () => {
-      if (onMoveEnd) {
-        onMoveEnd(map.getBounds());
-      }
-    };
-    map.on('moveend', handleMoveEnd);
-    return () => { map.off('moveend', handleMoveEnd); };
-  }, [map, onMoveEnd]);
-
-  return null;
+const formatDistance = (km: number): string => {
+  if (km < 1) return `${Math.round(km * 1000)}m`;
+  return `${km.toFixed(1)}km`;
 };
+
+type SortOption = 'distance' | 'rating' | 'price_low' | 'price_high';
 
 export const Discover: React.FC = () => {
   const navigate = useNavigate();
   const { supabase } = useAppContext();
-  const mapRef = React.useRef<L.Map | null>(null);
   
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'restaurants' | 'profiles'>('restaurants');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [showMap, setShowMap] = useState(true);
   
   // Restaurant state
-  const [allRestaurants, setAllRestaurants] = useState<Restaurant[]>([]);
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loadingRestaurants, setLoadingRestaurants] = useState(true);
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   
-  // Map state - Recife center
-  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
-  const [mapBounds, setMapBounds] = useState<L.LatLngBounds | null>(null);
-  const mapCenter: [number, number] = [-8.0476, -34.8770];
+  // Location
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   
-  // Filters
+  // Sort & Filter
+  const [sortBy, setSortBy] = useState<SortOption>('distance');
   const [filters, setFilters] = useState({
     cuisine: '',
     priceLevel: 0,
     minRating: 0
   });
   
-  // Profile search state
+  // Profile search
   const [profiles, setProfiles] = useState<User[]>([]);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
 
-  // Get user location and fetch restaurants
+  // Recife center
+  const mapCenter = { lat: -8.0476, lng: -34.8770 };
+
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => setUserLocation([pos.coords.latitude, pos.coords.longitude]),
+        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
         () => {}
       );
     }
@@ -111,12 +74,10 @@ export const Discover: React.FC = () => {
       const { data, error } = await supabase
         .from('restaurants')
         .select('*')
-        .eq('is_active', true)
-        .not('latitude', 'is', null)
-        .not('longitude', 'is', null);
+        .eq('is_active', true);
 
       if (error) throw error;
-      setAllRestaurants(data || []);
+      setRestaurants(data || []);
     } catch {
       // Silent fail
     } finally {
@@ -124,11 +85,10 @@ export const Discover: React.FC = () => {
     }
   };
 
-  // Filter restaurants and limit to 50 closest
-  const visibleRestaurants = useMemo(() => {
-    let filtered = [...allRestaurants];
+  // Filter and sort
+  const filteredRestaurants = useMemo(() => {
+    let filtered = [...restaurants];
     
-    // Search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(r => 
@@ -138,51 +98,51 @@ export const Discover: React.FC = () => {
       );
     }
     
-    // Cuisine filter
     if (filters.cuisine) {
       filtered = filtered.filter(r => 
         r.cuisine_types?.some(c => c.toLowerCase() === filters.cuisine.toLowerCase())
       );
     }
     
-    // Price filter
     if (filters.priceLevel > 0) {
       filtered = filtered.filter(r => r.price_level === filters.priceLevel);
     }
     
-    // Rating filter
     if (filters.minRating > 0) {
       filtered = filtered.filter(r => (r.rating || 0) >= filters.minRating);
     }
 
-    // If user location available, sort by distance and limit to 50
+    // Add distance
     if (userLocation) {
-      filtered = filtered
-        .map(r => ({
-          ...r,
-          _dist: calculateDistance(userLocation[0], userLocation[1], r.latitude!, r.longitude!)
-        }))
-        .sort((a, b) => (a as any)._dist - (b as any)._dist)
-        .slice(0, 50);
+      filtered = filtered.map(r => {
+        if (r.latitude && r.longitude) {
+          const dist = calculateDistance(userLocation.lat, userLocation.lng, r.latitude, r.longitude);
+          return { ...r, distance: formatDistance(dist), _distKm: dist };
+        }
+        return { ...r, _distKm: Infinity };
+      });
     } else {
-      // Otherwise just limit to 50
-      filtered = filtered.slice(0, 50);
+      filtered = filtered.map(r => ({ ...r, _distKm: Infinity }));
+    }
+    
+    // Sort
+    switch (sortBy) {
+      case 'distance':
+        filtered.sort((a, b) => (a as any)._distKm - (b as any)._distKm);
+        break;
+      case 'rating':
+        filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        break;
+      case 'price_low':
+        filtered.sort((a, b) => (a.price_level || 5) - (b.price_level || 5));
+        break;
+      case 'price_high':
+        filtered.sort((a, b) => (b.price_level || 0) - (a.price_level || 0));
+        break;
     }
     
     return filtered;
-  }, [allRestaurants, searchQuery, filters, userLocation]);
-
-  // Handle map move
-  const handleMapMoveEnd = useCallback((bounds: L.LatLngBounds) => {
-    setMapBounds(bounds);
-  }, []);
-
-  // Fly to user location
-  const flyToUser = () => {
-    if (userLocation && mapRef.current) {
-      mapRef.current.flyTo(userLocation, 15, { duration: 0.5 });
-    }
-  };
+  }, [restaurants, searchQuery, filters, sortBy, userLocation]);
 
   // Profile search
   useEffect(() => {
@@ -211,7 +171,7 @@ export const Discover: React.FC = () => {
       if (error) throw error;
       setProfiles(data || []);
     } catch {
-      // Silent fail
+      // Silent
     } finally {
       setLoadingProfiles(false);
     }
@@ -224,6 +184,18 @@ export const Discover: React.FC = () => {
 
   const hasActiveFilters = filters.cuisine || filters.priceLevel > 0 || filters.minRating > 0;
 
+  // Open directions in Google Maps
+  const openDirections = (restaurant: Restaurant) => {
+    if (!restaurant.latitude || !restaurant.longitude) return;
+    
+    const destination = `${restaurant.latitude},${restaurant.longitude}`;
+    const url = userLocation 
+      ? `https://www.google.com/maps/dir/${userLocation.lat},${userLocation.lng}/${destination}`
+      : `https://www.google.com/maps/search/?api=1&query=${destination}`;
+    
+    window.open(url, '_blank');
+  };
+
   // Toast auto-hide
   useEffect(() => {
     if (toastMessage) {
@@ -231,6 +203,12 @@ export const Discover: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [toastMessage]);
+
+  // Map iframe URL (OpenStreetMap embed - super light)
+  const mapIframeUrl = useMemo(() => {
+    const center = userLocation || mapCenter;
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${center.lng - 0.05}%2C${center.lat - 0.03}%2C${center.lng + 0.05}%2C${center.lat + 0.03}&layer=mapnik&marker=${center.lat}%2C${center.lng}`;
+  }, [userLocation]);
 
   return (
     <div className="min-h-screen bg-cream flex flex-col pb-20">
@@ -328,171 +306,244 @@ export const Discover: React.FC = () => {
           </div>
         </div>
 
-        {/* Filters Panel */}
-        {showFilters && activeTab === 'restaurants' && (
-          <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Culinária</label>
-              <select
-                value={filters.cuisine}
-                onChange={(e) => setFilters({ ...filters, cuisine: e.target.value })}
-                className="w-full h-10 px-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none focus:border-primary"
-              >
-                <option value="">Todas</option>
-                {CUISINE_OPTIONS.map(c => (
-                  <option key={c.label} value={c.label}>{c.label}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Preço</label>
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4].map(level => (
-                    <button
-                      key={level}
-                      onClick={() => setFilters({ ...filters, priceLevel: filters.priceLevel === level ? 0 : level })}
-                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                        filters.priceLevel === level
-                          ? 'bg-primary text-white'
-                          : 'bg-white border border-gray-200 text-gray-600'
-                      }`}
-                    >
-                      {'$'.repeat(level)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="flex-1">
-                <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nota mínima</label>
-                <div className="flex gap-1">
-                  {[3, 4, 4.5].map(rating => (
-                    <button
-                      key={rating}
-                      onClick={() => setFilters({ ...filters, minRating: filters.minRating === rating ? 0 : rating })}
-                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
-                        filters.minRating === rating
-                          ? 'bg-primary text-white'
-                          : 'bg-white border border-gray-200 text-gray-600'
-                      }`}
-                    >
-                      {rating}+
-                      <span className="material-symbols-outlined text-xs filled">star</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+        {/* Sort & Filters (restaurants only) */}
+        {activeTab === 'restaurants' && (
+          <>
+            {/* Sort Options */}
+            <div className="px-4 pb-3 flex gap-2 overflow-x-auto no-scrollbar">
+              {[
+                { value: 'distance', label: 'Mais perto', icon: 'near_me' },
+                { value: 'rating', label: 'Melhor avaliado', icon: 'star' },
+                { value: 'price_low', label: 'Menor preço', icon: 'arrow_downward' },
+                { value: 'price_high', label: 'Maior preço', icon: 'arrow_upward' },
+              ].map(option => (
+                <button
+                  key={option.value}
+                  onClick={() => setSortBy(option.value as SortOption)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    sortBy === option.value
+                      ? 'bg-dark text-white'
+                      : 'bg-white border border-gray-200 text-gray-600'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-base">{option.icon}</span>
+                  {option.label}
+                </button>
+              ))}
             </div>
 
-            {hasActiveFilters && (
-              <button
-                onClick={clearFilters}
-                className="w-full py-2 text-sm font-bold text-primary hover:bg-primary/5 rounded-xl"
-              >
-                Limpar filtros
-              </button>
+            {/* Filters Panel */}
+            {showFilters && (
+              <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Culinária</label>
+                  <select
+                    value={filters.cuisine}
+                    onChange={(e) => setFilters({ ...filters, cuisine: e.target.value })}
+                    className="w-full h-10 px-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none focus:border-primary"
+                  >
+                    <option value="">Todas</option>
+                    {CUISINE_OPTIONS.map(c => (
+                      <option key={c.label} value={c.label}>{c.label}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Preço</label>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4].map(level => (
+                        <button
+                          key={level}
+                          onClick={() => setFilters({ ...filters, priceLevel: filters.priceLevel === level ? 0 : level })}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                            filters.priceLevel === level
+                              ? 'bg-primary text-white'
+                              : 'bg-white border border-gray-200 text-gray-600'
+                          }`}
+                        >
+                          {'$'.repeat(level)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="flex-1">
+                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nota mínima</label>
+                    <div className="flex gap-1">
+                      {[3, 4, 4.5].map(rating => (
+                        <button
+                          key={rating}
+                          onClick={() => setFilters({ ...filters, minRating: filters.minRating === rating ? 0 : rating })}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
+                            filters.minRating === rating
+                              ? 'bg-primary text-white'
+                              : 'bg-white border border-gray-200 text-gray-600'
+                          }`}
+                        >
+                          {rating}+
+                          <span className="material-symbols-outlined text-xs filled">star</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {hasActiveFilters && (
+                  <button
+                    onClick={clearFilters}
+                    className="w-full py-2 text-sm font-bold text-primary hover:bg-primary/5 rounded-xl"
+                  >
+                    Limpar filtros
+                  </button>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </header>
 
       {/* Main Content */}
       {activeTab === 'restaurants' ? (
-        <div className="flex-1 relative">
-          {loadingRestaurants ? (
-            <div className="flex-1 flex items-center justify-center h-[60vh]">
-              <div className="text-center">
-                <div className="size-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <p className="text-gray-500">Carregando mapa...</p>
-              </div>
-            </div>
-          ) : (
-            <div className="h-[calc(100vh-200px)] relative">
-              <MapContainer
-                center={userLocation || mapCenter}
-                zoom={14}
-                style={{ height: '100%', width: '100%' }}
-                ref={mapRef}
-                zoomControl={false}
-              >
-                {/* CartoDB tiles - faster than OSM */}
-                <TileLayer
-                  attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-                  url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                />
-                
-                <MapController 
-                  userLocation={userLocation}
-                  onMoveEnd={handleMapMoveEnd}
-                />
-
-                {/* User location */}
-                {userLocation && (
-                  <>
-                    <Circle
-                      center={userLocation}
-                      radius={100}
-                      pathOptions={{ 
-                        color: '#4285F4', 
-                        fillColor: '#4285F4', 
-                        fillOpacity: 0.15,
-                        weight: 2
-                      }}
-                    />
-                    <Marker position={userLocation} icon={userIcon} />
-                  </>
-                )}
-
-                {/* Restaurant markers - click opens modal directly, no popup */}
-                {visibleRestaurants.map(restaurant => (
-                  restaurant.latitude && restaurant.longitude && (
-                    <Marker
-                      key={restaurant.id}
-                      position={[restaurant.latitude, restaurant.longitude]}
-                      icon={restaurantIcon}
-                      eventHandlers={{
-                        click: () => setSelectedRestaurant(restaurant)
-                      }}
-                    />
-                  )
-                ))}
-              </MapContainer>
-
-              {/* My Location Button */}
-              {userLocation && (
-                <button
-                  onClick={flyToUser}
-                  className="absolute bottom-20 right-4 z-[1000] bg-white rounded-full p-3 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95 transition-all"
-                >
-                  <span className="material-symbols-outlined text-primary">my_location</span>
-                </button>
-              )}
-
-              {/* Restaurant Count */}
-              <div className="absolute bottom-4 left-4 z-[1000] bg-white px-4 py-2 rounded-full shadow-lg border border-gray-100">
-                <span className="font-bold text-dark">{visibleRestaurants.length}</span>
+        <div className="flex-1 flex flex-col">
+          {/* Mini Map Preview */}
+          <div className="relative">
+            <div 
+              className={`overflow-hidden transition-all duration-300 ${showMap ? 'h-48' : 'h-0'}`}
+            >
+              <iframe
+                src={mapIframeUrl}
+                className="w-full h-48 border-0"
+                loading="lazy"
+                title="Mapa da região"
+              />
+              {/* Overlay with restaurant count */}
+              <div className="absolute bottom-2 left-2 bg-white/95 backdrop-blur px-3 py-1.5 rounded-full shadow-lg text-sm">
+                <span className="font-bold text-dark">{filteredRestaurants.length}</span>
                 <span className="text-gray-500 ml-1">restaurantes</span>
               </div>
-
-              {/* Zoom Controls */}
-              <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-1">
-                <button
-                  onClick={() => mapRef.current?.zoomIn()}
-                  className="bg-white rounded-lg p-2 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95"
-                >
-                  <span className="material-symbols-outlined">add</span>
-                </button>
-                <button
-                  onClick={() => mapRef.current?.zoomOut()}
-                  className="bg-white rounded-lg p-2 shadow-lg border border-gray-200 hover:bg-gray-50 active:scale-95"
-                >
-                  <span className="material-symbols-outlined">remove</span>
-                </button>
-              </div>
             </div>
-          )}
+            
+            {/* Toggle Map Button */}
+            <button
+              onClick={() => setShowMap(!showMap)}
+              className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-white rounded-full px-4 py-1.5 shadow-lg border border-gray-200 text-sm font-medium flex items-center gap-1 z-10"
+            >
+              <span className="material-symbols-outlined text-base">
+                {showMap ? 'expand_less' : 'map'}
+              </span>
+              {showMap ? 'Ocultar mapa' : 'Ver mapa'}
+            </button>
+          </div>
+
+          {/* Restaurant List */}
+          <div className={`flex-1 px-4 ${showMap ? 'pt-8' : 'pt-4'} pb-4`}>
+            {/* GPS Status */}
+            {!userLocation && (
+              <div className="mb-3 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-xl">
+                <span className="material-symbols-outlined text-sm">location_off</span>
+                Ative o GPS para ver distâncias e ordenar por proximidade
+              </div>
+            )}
+
+            {loadingRestaurants ? (
+              <div className="flex justify-center py-16">
+                <div className="size-10 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : filteredRestaurants.length === 0 ? (
+              <div className="text-center py-16 text-gray-400">
+                <span className="material-symbols-outlined text-5xl mb-3 opacity-30">restaurant</span>
+                <p className="font-medium">Nenhum restaurante encontrado</p>
+                {hasActiveFilters && (
+                  <button onClick={clearFilters} className="mt-2 text-primary font-bold text-sm">
+                    Limpar filtros
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredRestaurants.map(restaurant => (
+                  <div
+                    key={restaurant.id}
+                    className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden"
+                  >
+                    {/* Card Content - Clickable */}
+                    <button
+                      onClick={() => setSelectedRestaurant(restaurant)}
+                      className="w-full flex text-left active:bg-gray-50 transition-colors"
+                    >
+                      {/* Photo */}
+                      <div className="w-28 h-28 flex-shrink-0">
+                        <img
+                          src={restaurant.photo_url || DEFAULT_RESTAURANT}
+                          alt={restaurant.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
+                        />
+                      </div>
+                      
+                      {/* Info */}
+                      <div className="flex-1 p-3 flex flex-col justify-between min-w-0">
+                        <div>
+                          <h3 className="font-bold text-dark truncate pr-2">{restaurant.name}</h3>
+                          
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            {restaurant.rating && (
+                              <span className="flex items-center gap-0.5 bg-yellow-50 px-1.5 py-0.5 rounded-full">
+                                <span className="material-symbols-outlined text-yellow-500 text-xs filled">star</span>
+                                <span className="text-xs font-bold text-yellow-700">{restaurant.rating.toFixed(1)}</span>
+                              </span>
+                            )}
+                            {restaurant.price_level && (
+                              <span className="text-xs font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">
+                                {'$'.repeat(restaurant.price_level)}
+                              </span>
+                            )}
+                            {restaurant.cuisine_types?.[0] && (
+                              <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full truncate max-w-[80px]">
+                                {restaurant.cuisine_types[0]}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-xs text-gray-400 truncate flex items-center gap-1">
+                            <span className="material-symbols-outlined text-xs">location_on</span>
+                            {restaurant.neighborhood || 'Recife'}
+                          </p>
+                          {restaurant.distance && (
+                            <span className="text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                              {restaurant.distance}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                    
+                    {/* Action Bar */}
+                    <div className="flex border-t border-gray-100">
+                      <button
+                        onClick={() => setSelectedRestaurant(restaurant)}
+                        className="flex-1 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-1.5 border-r border-gray-100"
+                      >
+                        <span className="material-symbols-outlined text-base">info</span>
+                        Detalhes
+                      </button>
+                      <button
+                        onClick={() => openDirections(restaurant)}
+                        className="flex-1 py-2.5 text-sm font-bold text-primary hover:bg-primary/5 flex items-center justify-center gap-1.5"
+                      >
+                        <span className="material-symbols-outlined text-base">directions</span>
+                        Como chegar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         /* Profiles Tab */
@@ -540,22 +591,6 @@ export const Discover: React.FC = () => {
           )}
         </div>
       )}
-
-      {/* Custom marker styles */}
-      <style>{`
-        .restaurant-marker {
-          filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)) 
-                  hue-rotate(340deg) saturate(1.5) brightness(0.9);
-        }
-        .user-marker {
-          filter: drop-shadow(0 2px 4px rgba(66,133,244,0.5))
-                  hue-rotate(200deg) saturate(2);
-        }
-        .leaflet-container {
-          font-family: inherit !important;
-          background: #f5f5dc !important;
-        }
-      `}</style>
     </div>
   );
 };
