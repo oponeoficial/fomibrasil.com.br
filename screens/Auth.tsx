@@ -373,45 +373,42 @@ export const Register: React.FC = () => {
 
   // Username Check - REAL check against Supabase
   useEffect(() => {
-    if (!formData.username) {
-      setUsernameStatus('idle');
+  if (!formData.username) {
+    setUsernameStatus('idle');
+    return;
+  }
+
+  const checkUsername = setTimeout(async () => {
+    if (formData.username.length < 3) {
+      setUsernameStatus('taken');
       return;
     }
 
-    const checkUsername = setTimeout(async () => {
-      if (formData.username.length < 3) {
-        setUsernameStatus('taken');
-        return;
+    if (formData.username.includes(' ')) {
+      setUsernameStatus('taken');
+      return;
+    }
+
+    setUsernameStatus('checking');
+    
+    try {
+      const { data, error } = await supabase.rpc('check_username_available', {
+        target_username: formData.username
+      });
+
+      if (error) {
+        console.error('Username check error:', error);
+        setUsernameStatus('available'); // Fail open
+      } else {
+        setUsernameStatus(data ? 'available' : 'taken');
       }
+    } catch {
+      setUsernameStatus('available');
+    }
+  }, 500);
 
-      if (formData.username.includes(' ')) {
-        setUsernameStatus('taken');
-        return;
-      }
-
-      setUsernameStatus('checking');
-      
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('username', formData.username.toLowerCase())
-          .maybeSingle();
-
-        if (error) {
-          setUsernameStatus('available');
-        } else if (data) {
-          setUsernameStatus('taken');
-        } else {
-          setUsernameStatus('available');
-        }
-      } catch {
-        setUsernameStatus('available');
-      }
-    }, 500);
-
-    return () => clearTimeout(checkUsername);
-  }, [formData.username, supabase]);
+  return () => clearTimeout(checkUsername);
+}, [formData.username, supabase]);
 
   // Password Strength
   useEffect(() => {
