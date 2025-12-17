@@ -5,7 +5,7 @@ import { DEFAULT_AVATAR, DEFAULT_RESTAURANT } from '../constants';
 
 interface Notification {
   id: string;
-  type: 'like' | 'comment' | 'follow' | 'tag' | 'list_add';
+  type: 'like' | 'comment' | 'new_follower' | 'tag' | 'new_review';
   actor_id: string;
   actor?: {
     id: string;
@@ -21,10 +21,6 @@ interface Notification {
     restaurant?: {
       name: string;
     };
-  };
-  list_id?: string;
-  list?: {
-    name: string;
   };
   is_read: boolean;
   created_at: string;
@@ -61,13 +57,12 @@ export const Notifications: React.FC = () => {
         .select(`
           *,
           actor:profiles!actor_id(id, username, full_name, profile_photo_url),
-          review:reviews(
+          review:reviews!review_id(
             id, 
             title, 
             photos,
-            restaurant:restaurants(name)
-          ),
-          list:lists(name)
+            restaurant:restaurants!restaurant_id(name)
+          )
         `)
         .eq('user_id', currentUser.id)
         .order('created_at', { ascending: false })
@@ -124,17 +119,17 @@ export const Notifications: React.FC = () => {
           text: 'comentou em seu review de',
           target: notif.review?.restaurant?.name || notif.review?.title
         };
-      case 'follow':
+      case 'new_follower':
         return { text: 'começou a seguir você' };
       case 'tag':
         return {
           text: 'marcou você em um review de',
           target: notif.review?.restaurant?.name
         };
-      case 'list_add':
+      case 'new_review':
         return {
-          text: 'adicionou um restaurante à lista',
-          target: notif.list?.name
+          text: 'postou um novo review de',
+          target: notif.review?.restaurant?.name
         };
       default:
         return { text: 'interagiu com você' };
@@ -147,12 +142,12 @@ export const Notifications: React.FC = () => {
         return { icon: 'favorite', color: 'text-red-500' };
       case 'comment':
         return { icon: 'chat_bubble', color: 'text-blue-500' };
-      case 'follow':
+      case 'new_follower':
         return { icon: 'person_add', color: 'text-primary' };
       case 'tag':
         return { icon: 'sell', color: 'text-purple-500' };
-      case 'list_add':
-        return { icon: 'bookmark_add', color: 'text-green-500' };
+      case 'new_review':
+        return { icon: 'rate_review', color: 'text-green-500' };
       default:
         return { icon: 'notifications', color: 'text-gray-500' };
     }
@@ -261,7 +256,7 @@ export const Notifications: React.FC = () => {
                   />
                 )}
                 
-                {notif.type === 'follow' && notif.actor_id !== currentUser?.id && (
+                {notif.type === 'new_follower' && notif.actor_id !== currentUser?.id && (
                   <button 
                     onClick={() => handleFollowToggle(notif.actor_id)}
                     className={`px-4 py-1.5 text-xs font-bold rounded-full shadow-sm active:scale-95 transition-all ${

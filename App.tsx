@@ -26,7 +26,7 @@ const AppLayout: React.FC = () => {
 export default function App() {
   return (
     <AppProvider>
-      <Router>
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/" element={<Navigate to="/login" replace />} />
           
