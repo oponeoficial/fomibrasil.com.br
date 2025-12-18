@@ -11,15 +11,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// APENAS GRANDE RECIFE
 const CITIES = [
   { name: "Recife", state: "PE", lat: -8.0476, lng: -34.8770 },
   { name: "Olinda", state: "PE", lat: -7.9914, lng: -34.8416 },
   { name: "Jaboatão dos Guararapes", state: "PE", lat: -8.1128, lng: -35.0158 },
   { name: "Cabo de Santo Agostinho", state: "PE", lat: -8.2833, lng: -35.0333 },
-  { name: "Gravatá", state: "PE", lat: -8.2005, lng: -35.5644 },
-  { name: "Caruaru", state: "PE", lat: -8.2760, lng: -35.9819 },
-  { name: "Tamandaré", state: "PE", lat: -8.7594, lng: -35.1036 },
-  { name: "Ipojuca", state: "PE", lat: -8.3967, lng: -35.0636 },
+  { name: "Paulista", state: "PE", lat: -7.9406, lng: -34.8728 },
+  { name: "Camaragibe", state: "PE", lat: -8.0235, lng: -34.9817 },
+  { name: "São Lourenço da Mata", state: "PE", lat: -8.0020, lng: -35.0173 },
 ];
 
 const CUISINE_TYPES = [
@@ -34,6 +34,65 @@ const CUISINE_TYPES = [
   "cafe",
   "bakery"
 ];
+
+// Tipos do Google que devem ser BLOQUEADOS
+const BLOCKED_GOOGLE_TYPES = [
+  "lodging", "hotel", "motel", "resort",
+  "supermarket", "grocery_or_supermarket", 
+  "university", "school", "secondary_school", "primary_school",
+  "hospital", "doctor", "pharmacy", "drugstore", "dentist", "health",
+  "shopping_mall", "department_store",
+  "store", "furniture_store", "home_goods_store", "hardware_store", "electronics_store",
+  "gym", "spa", "beauty_salon", "hair_care",
+  "church", "mosque", "synagogue", "hindu_temple", "place_of_worship",
+  "gas_station", "car_dealer", "car_repair", "car_wash",
+  "real_estate_agency", "insurance_agency", "travel_agency", "bank", "atm",
+  "laundry", "storage", "moving_company", "painter", "plumber", "electrician",
+  "veterinary_care", "pet_store", "zoo", "aquarium",
+  "museum", "art_gallery", "library", "book_store",
+  "night_club", "casino"
+];
+
+// Padrões de nome que devem ser BLOQUEADOS
+const BLOCKED_NAME_PATTERNS = /hotel|pousada|resort|bangalô|hostel|motel|faculdade|universidade|shopping|hospital|supermercado|mercado|atacadão|assaí|carrefour|extra|bompreço|pão de açúcar|sam.?s club|makro|hiper|embalagens|artesanato|distribuidora|atacado|loja|store|clínica|academia|igreja|templo|cartório|banco|lotérica|farmácia|drogaria|pet\s?shop|veterinár|salão|barbearia|estética|imobiliária|construtora|concessionária|posto|gasolina|oficina|funilaria|lavanderia|gráfica|papelaria|livraria|museu|teatro|cinema|boate|night\s?club/i;
+
+// Função para verificar se deve bloquear o lugar
+function shouldBlockPlace(name: string, types: string[]): boolean {
+  // 1. Bloquear por padrão de nome
+  if (BLOCKED_NAME_PATTERNS.test(name)) {
+    return true;
+  }
+  
+  // 2. Verificar tipos do Google
+  const hasFoodType = types.some(t => 
+    t.includes('restaurant') || 
+    t === 'cafe' || 
+    t === 'bakery' || 
+    t === 'bar' ||
+    t === 'food' ||
+    t === 'meal_delivery' ||
+    t === 'meal_takeaway'
+  );
+  
+  const hasBlockedType = types.some(t => BLOCKED_GOOGLE_TYPES.includes(t));
+  
+  // 3. Se é "lodging" (hotel/pousada), SEMPRE bloqueia
+  if (types.includes('lodging')) {
+    return true;
+  }
+  
+  // 4. Se tem tipo bloqueado e NÃO é primariamente comida, bloqueia
+  if (hasBlockedType && !hasFoodType) {
+    return true;
+  }
+  
+  // 5. Se não tem NENHUM tipo de comida, bloqueia
+  if (!hasFoodType && types.length > 0) {
+    return true;
+  }
+  
+  return false;
+}
 
 // Nearby Search
 async function searchNearby(lat: number, lng: number, type: string): Promise<any> {
@@ -102,9 +161,9 @@ function mapCuisineTypes(types: string[]): string[] {
     .slice(0, 3);
 }
 
-// BULK SEED OTIMIZADO - Só insere restaurantes NOVOS
-async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: number; errors: string[] }> {
-  const results = { inserted: 0, skipped: 0, errors: [] as string[] };
+// BULK SEED OTIMIZADO - Só insere restaurantes NOVOS e VÁLIDOS
+async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: number; blocked: number; errors: string[] }> {
+  const results = { inserted: 0, skipped: 0, blocked: 0, errors: [] as string[] };
 
   // 1. BUSCAR TODOS OS google_place_id JÁ EXISTENTES (1 query só)
   const { data: existingPlaces } = await supabase
@@ -147,6 +206,13 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
           const details = await getPlaceDetails(place.place_id);
           if (!details) continue;
 
+          // VERIFICAR SE DEVE BLOQUEAR
+          if (shouldBlockPlace(details.name, details.types || [])) {
+            console.log(`🚫 BLOQUEADO: ${details.name} (types: ${details.types?.slice(0, 5).join(', ')})`);
+            results.blocked++;
+            continue;
+          }
+
           const { city: extractedCity, neighborhood } = extractLocation(details.address_components);
           const cuisineTypes = mapCuisineTypes(details.types || []);
 
@@ -174,11 +240,11 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
             results.errors.push(`${details.name}: ${error.message}`);
           } else {
             results.inserted++;
-            existingIds.add(details.place_id); // Marca como existente
+            existingIds.add(details.place_id);
             console.log(`✅ NOVO: ${details.name} (${extractedCity})`);
           }
 
-          // Rate limiting - evitar bloqueio da API
+          // Rate limiting
           await new Promise(r => setTimeout(r, 100));
         }
 
@@ -190,7 +256,7 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
     }
   }
 
-  console.log(`📊 Resultado final: ${results.inserted} novos inseridos, ${results.skipped} já existiam`);
+  console.log(`📊 Resultado: ${results.inserted} inseridos, ${results.skipped} já existiam, ${results.blocked} bloqueados`);
   return results;
 }
 

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useSupabase } from '../contexts/SupabaseContext';
+import { FeedService, StorageService } from '../services';
 import { Review, Comment } from '../types';
 
 interface UseFeedReturn {
@@ -19,32 +20,14 @@ export const useFeed = (): UseFeedReturn => {
 
   const refreshFeed = useCallback(async (userId: string) => {
     try {
-      const { data: reviewsData, error } = await supabase
-        .from('reviews')
-        .select(`
-          *,
-          user:profiles!user_id(id, username, full_name, profile_photo_url, is_verified),
-          restaurant:restaurants!restaurant_id(id, name, neighborhood, photo_url)
-        `)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      
+      const { data: reviewsData, error } = await FeedService.getReviews(supabase);
       if (error) return;
 
       if (reviewsData) {
-        const { data: userLikes } = await supabase
-          .from('likes')
-          .select('review_id')
-          .eq('user_id', userId);
-        
+        const { data: userLikes } = await FeedService.getUserLikes(supabase, userId);
         const likedReviewIds = new Set(userLikes?.map(l => l.review_id) || []);
 
-        const { data: savedData } = await supabase
-          .from('list_restaurants')
-          .select('restaurant_id, list_id, lists!inner(user_id)')
-          .eq('lists.user_id', userId);
-        
+        const { data: savedData } = await FeedService.getUserSavedRestaurants(supabase, userId);
         const savedRestaurantIds = new Set(savedData?.map(s => s.restaurant_id) || []);
 
         const mappedReviews = reviewsData.map(review => ({
@@ -74,9 +57,9 @@ export const useFeed = (): UseFeedReturn => {
 
     try {
       if (isLiked) {
-        await supabase.from('likes').delete().eq('user_id', userId).eq('review_id', reviewId);
+        await FeedService.removeLike(supabase, userId, reviewId);
       } else {
-        await supabase.from('likes').insert({ user_id: userId, review_id: reviewId });
+        await FeedService.addLike(supabase, userId, reviewId);
       }
     } catch {
       // Rollback on error
@@ -89,24 +72,11 @@ export const useFeed = (): UseFeedReturn => {
   }, [supabase, reviews]);
 
   const fetchComments = useCallback(async (reviewId: string): Promise<Comment[]> => {
-    const { data, error } = await supabase
-      .from('comments')
-      .select(`*, user:profiles!user_id(id, username, full_name, profile_photo_url)`)
-      .eq('review_id', reviewId)
-      .eq('is_active', true)
-      .order('created_at', { ascending: true });
-    
-    if (error) return [];
-    return data as Comment[];
+    return FeedService.getComments(supabase, reviewId);
   }, [supabase]);
 
   const addComment = useCallback(async (reviewId: string, content: string, userId: string): Promise<Comment | null> => {
-    const { data, error } = await supabase
-      .from('comments')
-      .insert({ user_id: userId, review_id: reviewId, content })
-      .select(`*, user:profiles!user_id(id, username, full_name, profile_photo_url)`)
-      .single();
-    
+    const { data, error } = await FeedService.addComment(supabase, userId, reviewId, content);
     if (error) return null;
 
     setReviews(prev => prev.map(r => 
@@ -117,48 +87,18 @@ export const useFeed = (): UseFeedReturn => {
   }, [supabase]);
 
   const uploadReviewPhotos = useCallback(async (files: File[], reviewId: string, userId: string): Promise<string[]> => {
-    const uploadedUrls: string[] = [];
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const fileExt = file.name.split('.').pop() || 'jpg';
-      const filePath = `${userId}/${reviewId}_${i + 1}.${fileExt}`;
-      
-      const { error } = await supabase.storage
-        .from('review-photos')
-        .upload(filePath, file, { upsert: true });
-      
-      if (!error) {
-        const { data: urlData } = supabase.storage
-          .from('review-photos')
-          .getPublicUrl(filePath);
-        
-        if (urlData?.publicUrl) {
-          uploadedUrls.push(urlData.publicUrl);
-        }
-      }
-    }
-    
-    return uploadedUrls;
+    return StorageService.uploadReviewPhotos(supabase, userId, reviewId, files);
   }, [supabase]);
 
   const addReview = useCallback(async (data: any, userId: string): Promise<string | null> => {
-    const { data: newReview, error } = await supabase
-      .from('reviews')
-      .insert({
-        user_id: userId,
-        restaurant_id: data.restaurantId,
-        title: data.title,
-        description: data.description,
-        review_type: data.reviewType === 'presencial' ? 'in_person' : 'delivery',
-        score_1: data.scores.score_1,
-        score_2: data.scores.score_2,
-        score_3: data.scores.score_3,
-        score_4: data.scores.score_4,
-        photos: []
-      })
-      .select()
-      .single();
+    const { data: newReview, error } = await FeedService.createReview(supabase, {
+      userId,
+      restaurantId: data.restaurantId,
+      title: data.title,
+      description: data.description,
+      reviewType: data.reviewType,
+      scores: data.scores
+    });
 
     if (error || !newReview) {
       console.error('Erro ao criar review:', error);
@@ -176,20 +116,13 @@ export const useFeed = (): UseFeedReturn => {
           size_bytes: data.photoFiles[index]?.size || 0
         }));
         
-        await supabase
-          .from('reviews')
-          .update({ photos: photosJson })
-          .eq('id', newReview.id);
+        await FeedService.updateReviewPhotos(supabase, newReview.id, photosJson);
       }
     }
 
     // Insert tags
     if (data.taggedUserIds?.length > 0) {
-      const tags = data.taggedUserIds.map((tagUserId: string) => ({
-        review_id: newReview.id,
-        tagged_user_id: tagUserId
-      }));
-      await supabase.from('review_tags').insert(tags);
+      await FeedService.addReviewTags(supabase, newReview.id, data.taggedUserIds);
     }
 
     await refreshFeed(userId);

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useSupabase } from '../contexts/SupabaseContext';
+import { ListsService } from '../services';
 import { List, Restaurant } from '../types';
 
 interface UseListsReturn {
@@ -23,11 +24,12 @@ export const useLists = (): UseListsReturn => {
     let defaultList = lists.find(l => l.is_default);
     
     if (!defaultList) {
-      const { data: newList } = await supabase
-        .from('lists')
-        .insert({ user_id: userId, name: 'Quero ir', is_default: true })
-        .select()
-        .single();
+      const { data: newList } = await ListsService.createList(supabase, {
+        userId,
+        name: 'Quero ir',
+        isPrivate: false,
+        isDefault: true
+      });
       
       if (newList) {
         defaultList = { ...newList, count: 0, items: [] };
@@ -39,7 +41,7 @@ export const useLists = (): UseListsReturn => {
     const isSaved = defaultList.items?.includes(restaurantId);
 
     if (isSaved) {
-      await supabase.from('list_restaurants').delete().eq('list_id', defaultList.id).eq('restaurant_id', restaurantId);
+      await ListsService.removeRestaurantFromList(supabase, defaultList.id, restaurantId);
       setLists(prev => prev.map(l => 
         l.id === defaultList!.id 
           ? { ...l, items: l.items?.filter(i => i !== restaurantId), count: (l.count || 1) - 1 } 
@@ -47,7 +49,7 @@ export const useLists = (): UseListsReturn => {
       ));
       return false;
     } else {
-      await supabase.from('list_restaurants').insert({ list_id: defaultList.id, restaurant_id: restaurantId });
+      await ListsService.addRestaurantToList(supabase, defaultList.id, restaurantId);
       setLists(prev => prev.map(l => 
         l.id === defaultList!.id 
           ? { ...l, items: [...(l.items || []), restaurantId], count: (l.count || 0) + 1 } 
@@ -58,7 +60,7 @@ export const useLists = (): UseListsReturn => {
   }, [supabase, lists]);
 
   const addRestaurantToList = useCallback(async (listId: string, restaurantId: string) => {
-    const { error } = await supabase.from('list_restaurants').insert({ list_id: listId, restaurant_id: restaurantId });
+    const { error } = await ListsService.addRestaurantToList(supabase, listId, restaurantId);
     if (!error) {
       setLists(prev => prev.map(l => 
         l.id === listId ? { ...l, items: [...(l.items || []), restaurantId], count: (l.count || 0) + 1 } : l
@@ -67,7 +69,7 @@ export const useLists = (): UseListsReturn => {
   }, [supabase]);
 
   const removeRestaurantFromList = useCallback(async (listId: string, restaurantId: string) => {
-    const { error } = await supabase.from('list_restaurants').delete().eq('list_id', listId).eq('restaurant_id', restaurantId);
+    const { error } = await ListsService.removeRestaurantFromList(supabase, listId, restaurantId);
     if (!error) {
       setLists(prev => prev.map(l => 
         l.id === listId ? { ...l, items: l.items?.filter(i => i !== restaurantId), count: (l.count || 1) - 1 } : l
@@ -76,11 +78,12 @@ export const useLists = (): UseListsReturn => {
   }, [supabase]);
 
   const createList = useCallback(async (name: string, isPrivate: boolean, userId: string, cover?: string) => {
-    const { data, error } = await supabase
-      .from('lists')
-      .insert({ user_id: userId, name, is_private: isPrivate, cover_photo_url: cover })
-      .select()
-      .single();
+    const { data, error } = await ListsService.createList(supabase, {
+      userId,
+      name,
+      isPrivate,
+      cover
+    });
     
     if (!error && data) {
       setLists(prev => [...prev, { ...data, count: 0, items: [] }]);
@@ -88,12 +91,7 @@ export const useLists = (): UseListsReturn => {
   }, [supabase]);
 
   const updateList = useCallback(async (listId: string, updates: { name?: string; is_private?: boolean; cover_photo_url?: string }) => {
-    const { data, error } = await supabase
-      .from('lists')
-      .update(updates)
-      .eq('id', listId)
-      .select()
-      .single();
+    const { data, error } = await ListsService.updateList(supabase, listId, updates);
     
     if (!error && data) {
       setLists(prev => prev.map(l => l.id === listId ? { ...l, ...data } : l));
@@ -103,33 +101,19 @@ export const useLists = (): UseListsReturn => {
   const deleteList = useCallback(async (listId: string) => {
     const list = lists.find(l => l.id === listId);
     if (!list || list.is_default) return;
-    const { error } = await supabase.from('lists').delete().eq('id', listId);
+    
+    const { error } = await ListsService.deleteList(supabase, listId);
     if (!error) {
       setLists(prev => prev.filter(l => l.id !== listId));
     }
   }, [supabase, lists]);
 
   const searchRestaurants = useCallback(async (query: string): Promise<Restaurant[]> => {
-    if (!query.trim()) return [];
-    const { data, error } = await supabase
-      .from('restaurants')
-      .select('*')
-      .ilike('name', `%${query}%`)
-      .limit(20);
-    
-    if (error) return [];
-    return data as Restaurant[];
+    return ListsService.searchRestaurants(supabase, query);
   }, [supabase]);
 
   const getRestaurantsByIds = useCallback(async (ids: string[]): Promise<Restaurant[]> => {
-    if (!ids.length) return [];
-    const { data, error } = await supabase
-      .from('restaurants')
-      .select('*')
-      .in('id', ids);
-    
-    if (error) return [];
-    return data as Restaurant[];
+    return ListsService.getRestaurantsByIds(supabase, ids);
   }, [supabase]);
 
   return {

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { useSupabase } from '../contexts/SupabaseContext';
+import { AuthService } from '../services';
 import { User, UserPreferences } from '../types';
 
 interface UseAuthReturn {
@@ -18,18 +19,11 @@ export const useAuth = (): UseAuthReturn => {
   const [session, setSession] = useState<Session | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const initialized = useRef(false);
 
   const fetchUserData = useCallback(async (userId: string) => {
     try {
-      const { data, error } = await supabase.rpc('get_user_session_data', {
-        p_user_id: userId
-      });
-
-      if (error) {
-        console.error('Error fetching user session data:', error);
-        return null;
-      }
-
+      const data = await AuthService.getSessionData(supabase, userId);
       if (data) {
         setCurrentUser(data.profile);
         return data;
@@ -41,18 +35,41 @@ export const useAuth = (): UseAuthReturn => {
     }
   }, [supabase]);
 
+  // Inicialização - roda apenas 1x
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session?.user) {
-        fetchUserData(session.user.id).finally(() => setLoading(false));
-      } else {
+    if (initialized.current) return;
+    initialized.current = true;
+
+    const initAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error('getSession error:', error);
+          setLoading(false);
+          return;
+        }
+
+        setSession(session);
+        
+        if (session?.user) {
+          await fetchUserData(session.user.id);
+        }
+      } catch (e) {
+        console.error('initAuth error:', e);
+      } finally {
         setLoading(false);
       }
-    });
+    };
 
+    initAuth();
+  }, [supabase, fetchUserData]);
+
+  // Listener de auth changes
+  useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session);
+      
       if (event === 'SIGNED_IN' && session?.user) {
         await fetchUserData(session.user.id);
         setLoading(false);
@@ -66,7 +83,7 @@ export const useAuth = (): UseAuthReturn => {
   }, [supabase, fetchUserData]);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await AuthService.signOut(supabase);
   }, [supabase]);
 
   const updateCurrentUser = useCallback((updates: Partial<User>) => {
@@ -76,26 +93,11 @@ export const useAuth = (): UseAuthReturn => {
   const setUserPreferences = useCallback(async (prefs: UserPreferences) => {
     if (!currentUser) return;
 
-    const updates = {
-      cuisines_disliked: prefs.dislikes,
-      occasions: prefs.occasions,
-      frequency: prefs.radar.frequency,
-      place_types: prefs.radar.placeTypes,
-      behavior: prefs.radar.behavior,
-      dietary_restrictions: prefs.restrictions,
-      onboarding_completed: true
-    };
-
-    const { data: updatedUser, error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', currentUser.id)
-      .select()
-      .single();
+    const { data: updatedUser, error } = await AuthService.updatePreferences(supabase, currentUser.id, prefs);
     
     if (error) throw error;
     if (updatedUser) {
-      setCurrentUser(prev => ({ ...prev, ...updatedUser }));
+      setCurrentUser(prev => prev ? { ...prev, ...updatedUser } : null);
     }
   }, [supabase, currentUser]);
 
