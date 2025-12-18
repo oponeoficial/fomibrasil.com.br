@@ -4,7 +4,7 @@ import { useAppContext } from '../AppContext';
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { supabase } = useAppContext();
+  const { supabase, currentUser } = useAppContext();
   
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -18,6 +18,15 @@ export const Login: React.FC = () => {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
   const [forgotLoading, setForgotLoading] = useState(false);
+
+  // Redireciona apenas após login bem-sucedido (não no mount inicial)
+  const [hasAttemptedLogin, setHasAttemptedLogin] = useState(false);
+  
+  useEffect(() => {
+    if (hasAttemptedLogin && currentUser) {
+      navigate(currentUser.onboarding_completed ? '/feed' : '/onboarding');
+    }
+  }, [currentUser, hasAttemptedLogin, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,7 +52,7 @@ export const Login: React.FC = () => {
         email = profile.email;
       }
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
         if (error.message.includes('Email not confirmed')) {
@@ -57,18 +66,12 @@ export const Login: React.FC = () => {
         return;
       }
 
-      if (data.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('onboarding_completed')
-          .eq('id', data.user.id)
-          .single();
-
-        navigate(profile?.onboarding_completed ? '/feed' : '/onboarding');
-      }
+      // Login OK - useEffect navegará quando currentUser for setado
+      setHasAttemptedLogin(true);
+      setIsLoading(false);
+      
     } catch {
       setErrorMessage('Erro ao fazer login. Tente novamente.');
-    } finally {
       setIsLoading(false);
     }
   };
