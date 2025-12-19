@@ -194,7 +194,7 @@ export const Login: React.FC = () => {
             className="h-20 mb-4 object-contain"
           />
           <h1 className="text-3xl font-bold text-dark text-center">Bem-vindo de volta</h1>
-          <p className="text-secondary text-center mt-2">Faça login para continuar sua jornada gastronômica</p>
+          <p className="text-secondary text-center mt-2"> Faça login na comunidade de quem come bem</p>
         </div>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-4">
@@ -593,7 +593,7 @@ export const Register: React.FC = () => {
         <button onClick={() => navigate('/login')} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5">
           <span className="material-symbols-outlined">chevron_left</span>
         </button>
-        <h1 className="flex-1 text-center font-bold text-lg">Criar Conta</h1>
+        <h1 className="flex-1 text-center font-bold text-xl">Criar Conta</h1>
         <div className="size-10"></div>
       </header>
 
@@ -766,6 +766,7 @@ export const Register: React.FC = () => {
             <label className="text-sm font-bold ml-1">Senha</label>
             <div className="relative">
               <input 
+              
                 name="password" 
                 value={formData.password} 
                 onChange={handleChange} 
@@ -774,6 +775,8 @@ export const Register: React.FC = () => {
                 placeholder="Mínimo 8 caracteres" 
                 className={`w-full h-14 rounded-full border-2 ${touched.password && formData.password.length < 8 ? 'border-primary' : 'border-transparent'} bg-white pl-5 pr-14 font-medium shadow-sm focus:border-primary focus:ring-0`} 
               />
+
+              
             </div>
             {formData.password.length > 0 && (
               <div className="mt-2 ml-1 flex items-center gap-2">
@@ -797,7 +800,7 @@ export const Register: React.FC = () => {
           <button 
             type="submit" 
             disabled={!canSubmit()}
-            className={`mt-4 w-full h-14 rounded-full text-white text-lg font-bold shadow-lg transition-all active:scale-[0.98] ${
+            className={`mt-4 w-full h-14 rounded-full text-white text-xl font-bold shadow-lg transition-all active:scale-[0.98] ${
               canSubmit() 
                 ? 'bg-primary shadow-primary/30' 
                 : 'bg-gray-300 cursor-not-allowed shadow-none'
