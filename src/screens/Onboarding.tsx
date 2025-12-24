@@ -1,24 +1,43 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CUISINE_OPTIONS, OCCASION_GROUPS, RADAR_OPTIONS, RESTRICTION_OPTIONS } from '../constants';
-import { OnboardingStep } from '../types';
 import { useAppContext } from '../AppContext';
+
+// Steps do onboarding (0 = perfil, só para OAuth)
+enum OnboardingStep {
+  PROFILE = 0,
+  DISLIKES = 1,
+  OCCASIONS = 2,
+  RADAR = 3,
+  RESTRICTIONS = 4
+}
 
 export const Onboarding: React.FC = () => {
   const navigate = useNavigate();
-  const { setUserPreferences, currentUser } = useAppContext();
-  const [step, setStep] = useState<OnboardingStep>(OnboardingStep.DISLIKES);
+  const { setUserPreferences, currentUser, supabase } = useAppContext();
+  
+  // Detectar se precisa completar perfil (usuário OAuth sem data de nascimento)
+  const needsProfileCompletion = !currentUser?.date_of_birth;
+  
+  const [step, setStep] = useState<OnboardingStep>(
+    needsProfileCompletion ? OnboardingStep.PROFILE : OnboardingStep.DISLIKES
+  );
   const [saving, setSaving] = useState(false);
+  const [showExitModal, setShowExitModal] = useState(false);
   
-  // -- State --
-  // Step 1
+  // -- State do Perfil (Step 0) --
+  const [profileData, setProfileData] = useState({
+    birthDate: '',
+    gender: '',
+    location: ''
+  });
+  const [profileErrors, setProfileErrors] = useState<{[key: string]: string}>({});
+  const [isLocating, setIsLocating] = useState(false);
+
+  // -- State existente --
   const [dislikes, setDislikes] = useState<string[]>([]);
-  
-  // Step 2
   const [occasions, setOccasions] = useState<string[]>([]);
   const [occasionError, setOccasionError] = useState<string | null>(null);
-
-  // Step 3
   const [radar, setRadar] = useState<{
     frequency: string;
     placeTypes: string[];
@@ -29,14 +48,78 @@ export const Onboarding: React.FC = () => {
     behavior: []
   });
   const [radarError, setRadarError] = useState<string | null>(null);
-
-  // Step 4
   const [restrictions, setRestrictions] = useState<string[]>([]);
+
+  // Atualizar step inicial quando currentUser carregar
+  useEffect(() => {
+    if (currentUser) {
+      const needs = !currentUser.date_of_birth;
+      if (!needs && step === OnboardingStep.PROFILE) {
+        setStep(OnboardingStep.DISLIKES);
+      }
+    }
+  }, [currentUser]);
+
+  // Validação do perfil
+  useEffect(() => {
+    const errors: {[key: string]: string} = {};
+    
+    if (profileData.birthDate) {
+      const today = new Date();
+      const birth = new Date(profileData.birthDate);
+      let age = today.getFullYear() - birth.getFullYear();
+      const m = today.getMonth() - birth.getMonth();
+      if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+        age--;
+      }
+      if (age < 18) {
+        errors.birthDate = 'Você precisa ter 18 anos ou mais';
+      }
+    }
+    
+    setProfileErrors(errors);
+  }, [profileData]);
 
   // -- Actions --
 
+  const saveProfileData = async () => {
+    if (!currentUser?.id) return false;
+    
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          date_of_birth: profileData.birthDate,
+          gender: profileData.gender,
+          city: profileData.location
+        })
+        .eq('id', currentUser.id);
+      
+      if (error) {
+        console.error('Erro ao salvar perfil:', error);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('Erro ao salvar perfil:', e);
+      return false;
+    }
+  };
+
   const handleNext = async () => {
-    if (step === OnboardingStep.DISLIKES) {
+    if (step === OnboardingStep.PROFILE) {
+      setSaving(true);
+      const success = await saveProfileData();
+      setSaving(false);
+      
+      if (success) {
+        setStep(OnboardingStep.DISLIKES);
+        window.scrollTo(0, 0);
+      } else {
+        alert('Erro ao salvar dados. Tente novamente.');
+      }
+    }
+    else if (step === OnboardingStep.DISLIKES) {
       setStep(OnboardingStep.OCCASIONS);
       window.scrollTo(0, 0);
     } 
@@ -72,12 +155,93 @@ export const Onboarding: React.FC = () => {
   };
 
   const handleBack = () => {
-    if (step > 1) {
+    // Se está no primeiro step (PROFILE ou DISLIKES), mostrar modal de confirmação
+    const isFirstStep = (needsProfileCompletion && step === OnboardingStep.PROFILE) || 
+                        (!needsProfileCompletion && step === OnboardingStep.DISLIKES);
+    
+    if (isFirstStep) {
+      setShowExitModal(true);
+      return;
+    }
+
+    if (step === OnboardingStep.DISLIKES && needsProfileCompletion) {
+      setStep(OnboardingStep.PROFILE);
+      window.scrollTo(0, 0);
+    } else if (step > 1) {
       setStep(step - 1);
       window.scrollTo(0, 0);
-    } else {
-      navigate(-1);
     }
+  };
+
+  const handleConfirmExit = async () => {
+    // Fazer logout e voltar para login
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error('Erro ao sair:', e);
+    }
+    navigate('/login');
+  };
+
+  const handleGPS = () => {
+    if (profileData.location) return;
+
+    setIsLocating(true);
+
+    if (!("geolocation" in navigator)) {
+      setIsLocating(false);
+      alert("Geolocalização não é suportada pelo seu navegador.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        
+        try {
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`, {
+            headers: {
+              'User-Agent': 'FomiApp/1.0',
+              'Accept-Language': 'pt-BR'
+            }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const city = data.address?.city || data.address?.town || data.address?.village || data.address?.municipality;
+            const state = data.address?.state_district || data.address?.state;
+            
+            let locationText = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+            if (city && state) locationText = `${city}, ${state}`;
+            else if (city) locationText = city;
+
+            setProfileData(prev => ({ ...prev, location: locationText }));
+          }
+        } catch {
+          setProfileData(prev => ({ ...prev, location: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}` }));
+        }
+        
+        setIsLocating(false);
+      },
+      (error) => {
+        setIsLocating(false);
+        let errorMessage = "Erro ao obter localização.";
+
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage = "Permissão de localização negada.";
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage = "Localização indisponível.";
+            break;
+          case error.TIMEOUT:
+            errorMessage = "Tempo esgotado.";
+            break;
+        }
+
+        alert(errorMessage);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
   };
 
   // -- Toggles --
@@ -154,6 +318,12 @@ export const Onboarding: React.FC = () => {
   // -- Validation Checks --
   
   const canContinue = () => {
+    if (step === OnboardingStep.PROFILE) {
+      const { birthDate, gender, location } = profileData;
+      const hasAllFields = !!birthDate && !!gender && !!location;
+      const noErrors = Object.keys(profileErrors).length === 0;
+      return hasAllFields && noErrors;
+    }
     if (step === OnboardingStep.OCCASIONS) {
       return occasions.length >= 2;
     }
@@ -169,21 +339,173 @@ export const Onboarding: React.FC = () => {
 
   // -- Render Helpers --
 
+  const getTotalSteps = () => needsProfileCompletion ? 5 : 4;
+  const getCurrentStepNumber = () => needsProfileCompletion ? step + 1 : step;
+
+  const renderExitModal = () => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowExitModal(false)} />
+      <div className="relative bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-bounce-in">
+        <div className="p-6 text-center">
+          <div className="size-16 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="material-symbols-outlined text-3xl">warning</span>
+          </div>
+          <h3 className="text-xl font-bold text-dark mb-2">Sair do cadastro?</h3>
+          <p className="text-secondary text-sm mb-6">
+            Se você sair agora, suas respostas serão perdidas e você precisará começar novamente.
+          </p>
+          
+          <div className="flex flex-col gap-3">
+            <button 
+              onClick={() => setShowExitModal(false)}
+              className="w-full h-12 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 active:scale-95 transition-transform"
+            >
+              Continuar cadastro
+            </button>
+            <button 
+              onClick={handleConfirmExit}
+              className="w-full h-12 bg-gray-100 text-gray-600 font-bold rounded-xl active:scale-95 transition-transform"
+            >
+              Sair mesmo assim
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderHeader = () => (
     <div className="sticky top-0 z-30 bg-cream/95 backdrop-blur-sm pt-4 pb-2 px-6 border-b border-black/5">
       <div className="flex items-center justify-between mb-4">
         <button onClick={handleBack} className="size-10 flex items-center justify-center rounded-full bg-white shadow-sm active:scale-95 transition-transform">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <span className="text-xs font-bold uppercase tracking-wider text-secondary">Passo {step} de 4</span>
+        <span className="text-xs font-bold uppercase tracking-wider text-secondary">
+          Passo {getCurrentStepNumber()} de {getTotalSteps()}
+        </span>
         <div className="w-10"></div>
       </div>
       <div className="flex w-full gap-2 mb-2">
-        {[1, 2, 3, 4].map(i => (
-          <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${i <= step ? 'bg-primary' : 'bg-black/10'}`} />
+        {Array.from({ length: getTotalSteps() }, (_, i) => i + 1).map(i => (
+          <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${i <= getCurrentStepNumber() ? 'bg-primary' : 'bg-black/10'}`} />
         ))}
       </div>
     </div>
+  );
+
+  const renderStepProfile = () => (
+    <>
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold leading-tight mb-2">Complete seu perfil</h1>
+        <p className="text-lg text-secondary leading-snug">Precisamos de algumas informações para personalizar sua experiência</p>
+      </div>
+
+      <div className="space-y-5 pb-32">
+        {/* Data de Nascimento */}
+        <div className="space-y-2">
+          <label className="text-sm font-bold ml-1 flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-[18px]">cake</span>
+            Data de Nascimento
+          </label>
+          <input 
+            type="date"
+            value={profileData.birthDate}
+            onChange={(e) => setProfileData(prev => ({ ...prev, birthDate: e.target.value }))}
+            className={`w-full h-14 rounded-2xl border-2 ${profileErrors.birthDate ? 'border-primary' : 'border-transparent'} bg-white px-5 font-medium shadow-sm focus:border-primary focus:ring-0 focus:outline-none`}
+          />
+          {profileErrors.birthDate && (
+            <p className="text-xs text-primary font-medium ml-2">{profileErrors.birthDate}</p>
+          )}
+        </div>
+
+        {/* Gênero */}
+        <div className="space-y-2">
+          <label className="text-sm font-bold ml-1 flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-[18px]">person</span>
+            Gênero
+          </label>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { value: 'male', label: 'Masculino', icon: 'male' },
+              { value: 'female', label: 'Feminino', icon: 'female' },
+              { value: 'other', label: 'Outro', icon: 'transgender' }
+            ].map(option => {
+              const isSelected = profileData.gender === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setProfileData(prev => ({ ...prev, gender: option.value }))}
+                  className={`flex flex-col items-center gap-2 py-4 rounded-2xl border-2 transition-all active:scale-95 ${
+                    isSelected 
+                      ? 'bg-primary border-primary text-white shadow-md' 
+                      : 'bg-white border-transparent text-dark hover:border-gray-200'
+                  }`}
+                >
+                  <span className={`material-symbols-outlined text-[24px] ${isSelected ? '' : 'text-primary'}`}>
+                    {option.icon}
+                  </span>
+                  <span className="text-sm font-medium">{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Localização */}
+        <div className="space-y-2">
+          <label className="text-sm font-bold ml-1 flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-[18px]">location_on</span>
+            Localização
+          </label>
+          
+          <button 
+            type="button" 
+            onClick={handleGPS}
+            disabled={isLocating || !!profileData.location}
+            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all ${
+              profileData.location 
+                ? 'bg-green-100 text-green-700 border border-green-200' 
+                : 'bg-white shadow-sm text-primary hover:bg-gray-50 border border-transparent'
+            }`}
+          >
+            {isLocating ? (
+              <>
+                <span className="block size-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                Obtendo localização...
+              </>
+            ) : profileData.location ? (
+              <>
+                <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                Localização obtida
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined text-[18px]">my_location</span>
+                Usar minha localização
+              </>
+            )}
+          </button>
+
+          <input 
+            type="text"
+            value={profileData.location}
+            onChange={(e) => setProfileData(prev => ({ ...prev, location: e.target.value }))}
+            placeholder="Ou digite sua cidade..."
+            className="w-full h-14 rounded-2xl border-2 border-transparent bg-white px-5 font-medium shadow-sm focus:border-primary focus:ring-0 focus:outline-none"
+          />
+        </div>
+
+        {/* Info */}
+        <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl flex gap-3 mt-6">
+          <span className="material-symbols-outlined text-blue-500 shrink-0">info</span>
+          <p className="text-sm text-blue-800">
+            Essas informações nos ajudam a recomendar lugares adequados para você. 
+            Você pode alterar depois nas configurações.
+          </p>
+        </div>
+      </div>
+    </>
   );
 
   const renderStep1 = () => (
@@ -416,9 +738,12 @@ export const Onboarding: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-cream flex flex-col max-w-md mx-auto shadow-2xl relative">
+      {showExitModal && renderExitModal()}
+      
       {renderHeader()}
       
       <main className="flex-1 px-6 pt-4 relative overflow-y-auto no-scrollbar">
+        {step === OnboardingStep.PROFILE && renderStepProfile()}
         {step === OnboardingStep.DISLIKES && renderStep1()}
         {step === OnboardingStep.OCCASIONS && renderStep2()}
         {step === OnboardingStep.RADAR && renderStep3()}

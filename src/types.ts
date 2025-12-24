@@ -8,9 +8,11 @@ export interface User {
   bio?: string;
   city?: string;
   neighborhood?: string;
-  reviews_count?: number; // Calculated/Joined
-  followers_count?: number; // Calculated/Joined
-  following_count?: number; // Calculated/Joined
+  date_of_birth?: string;
+  gender?: string;
+  reviews_count?: number;
+  followers_count?: number;
+  following_count?: number;
   is_verified?: boolean;
   onboarding_completed?: boolean;
   
@@ -34,15 +36,15 @@ export interface Restaurant {
   website?: string;
   google_maps_url?: string;
   photo_url: string;
-  cuisine_types?: string[]; // JSONB
-  occasions?: string[]; // JSONB
+  cuisine_types?: string[];
+  occasions?: string[];
   price_level?: number;
   rating?: number;
   reviews_count?: number;
   review_count?: number;
   google_place_id?: string;
-  opening_hours?: string[] | { weekday_text?: string[] };  // NOVO
-  is_open_now?: boolean;  // NOVO
+  opening_hours?: string[] | { weekday_text?: string[] };
+  is_open_now?: boolean;
 
   // UI Helpers (Optional)
   type?: string;
@@ -55,14 +57,14 @@ export interface Restaurant {
 export interface Review {
   id: string;
   user_id: string;
-  user?: User; // Joined
+  user?: User;
   restaurant_id: string;
-  restaurant?: Restaurant; // Joined
+  restaurant?: Restaurant;
   title: string;
   description: string;
   review_type: 'in_person' | 'delivery';
   average_score: number;
-  photos: { url: string; order: number }[]; // JSONB
+  photos: { url: string; order: number }[];
   created_at: string;
   
   // Frontend helpers
@@ -93,7 +95,7 @@ export interface List {
   
   // Frontend helpers
   count?: number;
-  items?: string[]; // Array of restaurant IDs for easy checking
+  items?: string[];
 }
 
 // Helper types for App logic
@@ -106,13 +108,6 @@ export interface UserPreferences {
     behavior: string[];
   };
   restrictions: string[];
-}
-
-export enum OnboardingStep {
-  DISLIKES = 1,
-  OCCASIONS = 2,
-  RADAR = 3,
-  RESTRICTIONS = 4
 }
 
 export interface RecommendationSection {

@@ -50,6 +50,8 @@ export const OCCASION_GROUPS = [
     options: [
       { label: 'Bom pra date', icon: 'favorite' },
       { label: 'Comemorar aniversário', icon: 'cake' },
+      { label: 'Jantar de noivado', icon: 'diamond' },
+      { label: 'Confraternização', icon: 'groups' },
       { label: 'Levar um gringo', icon: 'language' }
     ]
   },
@@ -69,7 +71,6 @@ export const OCCASION_GROUPS = [
     options: [
       { label: 'Comida/lanche rápido', icon: 'bolt' },
       { label: 'Adoçar a boca', icon: 'icecream' },
-      { label: 'Visual foda', icon: 'photo_camera' },
       { label: 'Brunch', icon: 'brunch_dining' },
       { label: 'Em casa (delivery)', icon: 'delivery_dining' }
     ]
@@ -88,11 +89,11 @@ export const RADAR_OPTIONS = {
     { label: 'Raiz/Comida de verdade', icon: 'restaurant' },
     { label: 'Tradicional/Clássicos', icon: 'auto_awesome' },
     { label: 'Sofisticado/Alta coquetelaria', icon: 'wine_bar' },
-    { label: 'Visual foda/Instagramável', icon: 'photo_camera' },
     { label: 'Fora do óbvio/Escondido', icon: 'explore' },
     { label: 'Hypado/Disputado', icon: 'whatshot' },
     { label: 'Pequeno e intimista', icon: 'brightness_low' },
     { label: 'Café rápido/No balcão', icon: 'coffee' },
+    { label: 'Sorvetes/Doces', icon: 'icecream' },
     { label: 'Family-friendly', icon: 'family_restroom' }
   ],
   behaviors: [
@@ -111,7 +112,7 @@ export const RESTRICTION_OPTIONS = [
   { label: 'Sem glúten', icon: 'grain' },
   { label: 'Sem frutos do mar', icon: 'set_meal' },
   { label: 'Sem amendoim', icon: 'nutrition' },
-  { label: 'Kosher', icon: 'star_of_david' },
+  { label: 'Kosher', icon: 'verified' },
   { label: 'Halal', icon: 'mosque' }
 ];
 
