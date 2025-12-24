@@ -9,7 +9,10 @@ export const Login: React.FC = () => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => {
+    // Recuperar preferência salva
+    return localStorage.getItem('fomi_remember_me') === 'true';
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [socialLoading, setSocialLoading] = useState<'google' | null>(null);
@@ -39,6 +42,11 @@ export const Login: React.FC = () => {
     checkOAuthRedirect();
   }, [supabase]);
 
+  // Salvar preferência de "Lembrar de mim"
+  useEffect(() => {
+    localStorage.setItem('fomi_remember_me', rememberMe.toString());
+  }, [rememberMe]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -63,7 +71,11 @@ export const Login: React.FC = () => {
         email = profile.email;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      // Se "Lembrar de mim" estiver desmarcado, a sessão expira ao fechar o navegador
+      const { error } = await supabase.auth.signInWithPassword({ 
+        email, 
+        password,
+      });
 
       if (error) {
         if (error.message.includes('Email not confirmed')) {
@@ -75,6 +87,13 @@ export const Login: React.FC = () => {
         }
         setIsLoading(false);
         return;
+      }
+
+      // Se não quer lembrar, limpar ao fechar aba (sessionStorage flag)
+      if (!rememberMe) {
+        sessionStorage.setItem('fomi_session_only', 'true');
+      } else {
+        sessionStorage.removeItem('fomi_session_only');
       }
 
       setHasAttemptedLogin(true);
@@ -342,8 +361,9 @@ export const Register: React.FC = () => {
 
   const [touched, setTouched] = useState<{[key: string]: boolean}>({});
   const [errors, setErrors] = useState<{[key: string]: string}>({});
-  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'error'>('idle');
   const [passwordStrength, setPasswordStrength] = useState<0 | 1 | 2 | 3>(0);
+  const [showPassword, setShowPassword] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -401,42 +421,86 @@ export const Register: React.FC = () => {
     setErrors(currentErrors);
   }, [formData, touched]);
 
+  // Verificação de username com timeout
   useEffect(() => {
     if (!formData.username) {
       setUsernameStatus('idle');
       return;
     }
 
-    const checkUsername = setTimeout(async () => {
-      if (formData.username.length < 3) {
-        setUsernameStatus('taken');
-        return;
-      }
+    // Validações locais primeiro
+    if (formData.username.length < 3) {
+      setUsernameStatus('taken');
+      return;
+    }
 
-      if (formData.username.includes(' ')) {
-        setUsernameStatus('taken');
-        return;
-      }
+    if (formData.username.includes(' ')) {
+      setUsernameStatus('taken');
+      return;
+    }
 
-      setUsernameStatus('checking');
+    // Verificar caracteres válidos (apenas letras, números e underscore)
+    if (!/^[a-zA-Z0-9_]+$/.test(formData.username)) {
+      setUsernameStatus('taken');
+      return;
+    }
 
+    setUsernameStatus('checking');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout
+
+    const checkUsername = async () => {
       try {
-        const { data, error } = await supabase.rpc('check_username_available', {
-          target_username: formData.username
+        // Primeiro tentar RPC com timeout
+        const rpcPromise = supabase.rpc('check_username_available', {
+          target_username: formData.username.toLowerCase()
         });
 
+        const { data, error } = await rpcPromise;
+
+        clearTimeout(timeoutId);
+
         if (error) {
-          console.error('Username check error:', error);
-          setUsernameStatus('available');
+          console.warn('RPC error, trying fallback:', error);
+          // Fallback: query direta
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('username', formData.username.toLowerCase())
+            .limit(1);
+          
+          setUsernameStatus(profiles && profiles.length > 0 ? 'taken' : 'available');
         } else {
           setUsernameStatus(data ? 'available' : 'taken');
         }
-      } catch {
-        setUsernameStatus('available');
+      } catch (err) {
+        clearTimeout(timeoutId);
+        console.warn('Username check error:', err);
+        
+        // Em caso de erro/timeout, tentar fallback simples
+        try {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('username', formData.username.toLowerCase())
+            .limit(1);
+          
+          setUsernameStatus(profiles && profiles.length > 0 ? 'taken' : 'available');
+        } catch {
+          // Se tudo falhar, assumir disponível para não travar
+          setUsernameStatus('available');
+        }
       }
-    }, 500);
+    };
 
-    return () => clearTimeout(checkUsername);
+    const debounceTimeout = setTimeout(checkUsername, 500);
+
+    return () => {
+      clearTimeout(debounceTimeout);
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [formData.username, supabase]);
 
   useEffect(() => {
@@ -730,6 +794,7 @@ export const Register: React.FC = () => {
                 type="text" 
                 placeholder="usuario" 
                 autoCapitalize="none"
+                autoCorrect="off"
                 className={`w-full h-14 rounded-full border-2 transition-colors ${
                   usernameStatus === 'taken' ? 'border-primary' : 
                   usernameStatus === 'available' ? 'border-green-500' : 
@@ -752,7 +817,8 @@ export const Register: React.FC = () => {
               {usernameStatus === 'taken' && (
                 <p className="text-xs text-primary font-medium">
                   {formData.username.length < 3 ? 'Mínimo de 3 caracteres.' : 
-                   formData.username.includes(' ') ? 'Não pode conter espaços.' : 
+                   formData.username.includes(' ') ? 'Não pode conter espaços.' :
+                   !/^[a-zA-Z0-9_]+$/.test(formData.username) ? 'Apenas letras, números e _' :
                    'Nome de usuário indisponível.'}
                 </p>
               )}
@@ -853,10 +919,17 @@ export const Register: React.FC = () => {
                 value={formData.password} 
                 onChange={handleChange} 
                 onBlur={() => handleBlur('password')}
-                type="password" 
+                type={showPassword ? "text" : "password"}
                 placeholder="Mínimo 8 caracteres" 
                 className={`w-full h-14 rounded-full border-2 ${touched.password && formData.password.length < 8 ? 'border-primary' : 'border-transparent'} bg-white pl-5 pr-14 font-medium shadow-sm focus:border-primary focus:ring-0`} 
               />
+              <button 
+                type="button" 
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-dark transition-colors"
+              >
+                <span className="material-symbols-outlined">{showPassword ? 'visibility' : 'visibility_off'}</span>
+              </button>
             </div>
             {formData.password.length > 0 && (
               <div className="mt-2 ml-1 flex items-center gap-2">

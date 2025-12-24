@@ -87,11 +87,126 @@ const FollowListModal: React.FC<{
   );
 };
 
+// --- ACTIVITY CARD (ESTILO BELI) ---
+const ActivityCard: React.FC<{
+  activity: { type: 'review' | 'bookmark'; data: Review; date: Date };
+  user: User;
+  onPhotoClick: () => void;
+  onSaveToList: (restaurantId: string) => void;
+  onToggleWantToGo: (restaurantId: string) => void;
+}> = ({ activity, user, onPhotoClick, onSaveToList, onToggleWantToGo }) => {
+  const { data } = activity;
+  const restaurant = data.restaurant;
+  const photoUrl = data.photos?.[0]?.url || null;
+  const hasPhoto = !!photoUrl;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+      {/* Header: User action */}
+      <div className="px-4 pt-4 pb-3">
+        <div className="flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            {/* User + Action */}
+            <div className="flex items-center gap-1 text-sm mb-1 flex-wrap">
+              <span className="font-bold text-dark">{user.full_name?.split(' ')[0] || user.username}</span>
+              <span className="text-gray-500">
+                {activity.type === 'bookmark' ? 'salvou' : 'avaliou'}
+              </span>
+              <span className="font-bold text-dark truncate">{restaurant?.name || 'Restaurante'}</span>
+            </div>
+            
+            {/* Location */}
+            {restaurant && (
+              <div className="flex items-center gap-1 text-xs text-gray-400">
+                <span className="material-symbols-outlined text-[12px]">restaurant</span>
+                <span>
+                  {restaurant.neighborhood && `${restaurant.neighborhood}, `}
+                  {restaurant.city || 'Recife'}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Score Badge - Vermelho */}
+          {data.average_score && (
+            <div className="size-12 rounded-full border-2 border-primary flex items-center justify-center shrink-0 ml-3">
+              <span className="text-primary font-bold text-lg">{data.average_score.toFixed(1)}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Photo - Só mostra se tiver foto, clicável para ir ao post */}
+      {hasPhoto && (
+        <div className="px-4 pb-3">
+          <img 
+            src={photoUrl} 
+            alt={restaurant?.name || 'Review'} 
+            className="w-full h-48 object-cover rounded-xl bg-gray-100 cursor-pointer hover:opacity-95 transition-opacity active:scale-[0.99]"
+            onClick={onPhotoClick}
+            onError={(e) => { 
+              (e.target as HTMLImageElement).style.display = 'none'; 
+            }}
+          />
+        </div>
+      )}
+
+      {/* Notes + Actions (lado a lado) */}
+      <div className="px-4 pb-3 flex items-start justify-between gap-3">
+        {/* Notes / Description */}
+        <div className="flex-1 min-w-0">
+          {data.description && (
+            <p className="text-sm text-gray-600">
+              <span className="font-semibold text-dark">Notas: </span>
+              <span className="line-clamp-2">{data.description}</span>
+            </p>
+          )}
+          {/* Timestamp */}
+          <p className="text-[10px] text-gray-400 uppercase tracking-wide mt-2">
+            {formatRelativeDate(activity.date)}
+          </p>
+        </div>
+
+        {/* Actions - Pequenos, lado direito */}
+        <div className="flex items-center gap-1 shrink-0">
+          <button 
+            onClick={(e) => { e.stopPropagation(); restaurant?.id && onSaveToList(restaurant.id); }}
+            className="size-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-gray-100 hover:text-primary transition-colors active:scale-95"
+            title="Adicionar a uma lista"
+          >
+            <span className="material-symbols-outlined text-lg">add_circle</span>
+          </button>
+          <button 
+            onClick={(e) => { e.stopPropagation(); restaurant?.id && onToggleWantToGo(restaurant.id); }}
+            className="size-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-gray-100 hover:text-primary transition-colors active:scale-95"
+            title="Quero ir"
+          >
+            <span className="material-symbols-outlined text-lg">bookmark</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Helper: Formatar data relativa
+const formatRelativeDate = (date: Date): string => {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return 'Hoje';
+  if (diffDays === 1) return 'Ontem';
+  if (diffDays < 7) return `${diffDays} dias atrás`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} semanas atrás`;
+  return date.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' });
+};
+
 // --- MAIN COMPONENT ---
 export const Profile: React.FC = () => {
   const navigate = useNavigate();
   const { username } = useParams();
-  const { supabase, currentUser, following, followUser, unfollowUser } = useAppContext();
+  const { supabase, currentUser, following, followUser, unfollowUser, toggleSaveRestaurant, lists, addRestaurantToList } = useAppContext();
   
   // Profile data
   const [loading, setLoading] = useState(true);
@@ -121,6 +236,7 @@ export const Profile: React.FC = () => {
   const [showBlockConfirm, setShowBlockConfirm] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showListSelector, setShowListSelector] = useState<string | null>(null); // restaurantId para adicionar
 
   const isCurrentUser = !username || username === currentUser?.username;
   const targetUsername = username?.replace('@', '') || currentUser?.username;
@@ -226,12 +342,24 @@ export const Profile: React.FC = () => {
   }, [followListType, fetchFollowers, fetchFollowing]);
 
   // --- COMPUTED ---
-  const defaultList = useMemo(() => userLists.find(l => l.is_default), [userLists]);
-  const displayLists = useMemo(() => userLists.filter(l => {
-    if (l.is_default) return false;
-    if (isCurrentUser) return true;
-    return !l.is_private;
-  }), [userLists, isCurrentUser]);
+  // Todas as listas para o slider (default primeiro, depois as outras)
+  const allDisplayLists = useMemo(() => {
+    const defaultList = userLists.find(l => l.is_default);
+    const otherLists = userLists.filter(l => {
+      if (l.is_default) return false;
+      if (isCurrentUser) return true;
+      return !l.is_private;
+    });
+    
+    // Default list primeiro, depois as outras
+    const result: List[] = [];
+    if (defaultList && (isCurrentUser || isFollowingProfile)) {
+      result.push(defaultList);
+    }
+    result.push(...otherLists);
+    
+    return result;
+  }, [userLists, isCurrentUser, isFollowingProfile]);
 
   const activities = useMemo(() => 
     userReviews.map(r => ({ type: 'review' as const, data: r, date: new Date(r.created_at) }))
@@ -365,6 +493,24 @@ export const Profile: React.FC = () => {
       setIsFollowingProfile(true);
       showToast("Seguindo!");
     }
+  };
+
+  // --- SAVE TO LIST ---
+  const handleToggleWantToGo = async (restaurantId: string) => {
+    if (!currentUser) {
+      showToast("Faça login para salvar");
+      return;
+    }
+    const saved = await toggleSaveRestaurant(restaurantId);
+    showToast(saved ? "Salvo em 'Quero ir'" : "Removido de 'Quero ir'");
+  };
+
+  const handleOpenListSelector = (restaurantId: string) => {
+    if (!currentUser) {
+      showToast("Faça login para salvar");
+      return;
+    }
+    setShowListSelector(restaurantId);
   };
 
   const handleBlock = async () => {
@@ -576,14 +722,84 @@ export const Profile: React.FC = () => {
         onUserClick={(uname) => navigate(`/profile/${uname}`)}
       />
 
-      {/* Navbar */}
+      {/* List Selector Modal */}
+      {showListSelector && (
+        <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center p-0 sm:p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowListSelector(null)} />
+          <div className="relative bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-sm max-h-[70vh] flex flex-col shadow-2xl animate-slide-up sm:animate-bounce-in overflow-hidden">
+            <div className="flex justify-between items-center p-4 border-b border-gray-100">
+              <h3 className="font-bold text-dark text-lg">Salvar em uma lista</h3>
+              <button onClick={() => setShowListSelector(null)} className="p-2 hover:bg-gray-100 rounded-full">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {lists.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <span className="material-symbols-outlined text-4xl mb-2">playlist_add</span>
+                  <p>Nenhuma lista criada</p>
+                  <button 
+                    onClick={() => { setShowListSelector(null); navigate('/lists'); }}
+                    className="mt-4 text-primary font-bold text-sm"
+                  >
+                    Criar primeira lista
+                  </button>
+                </div>
+              ) : (
+                lists.map(list => (
+                  <button
+                    key={list.id}
+                    onClick={async () => {
+                      try {
+                        await addRestaurantToList(list.id, showListSelector);
+                        showToast(`Salvo em "${list.name}"`);
+                      } catch {
+                        showToast("Erro ao salvar");
+                      }
+                      setShowListSelector(null);
+                    }}
+                    className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl transition-colors"
+                  >
+                    <div className={`size-10 rounded-lg flex items-center justify-center ${list.is_default ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-500'}`}>
+                      <span className="material-symbols-outlined">{list.is_default ? 'bookmark' : 'list'}</span>
+                    </div>
+                    <div className="text-left flex-1">
+                      <p className="font-bold text-sm text-dark">{list.name}</p>
+                      <p className="text-xs text-gray-500">{list.count || 0} lugares</p>
+                    </div>
+                    {list.is_private && (
+                      <span className="material-symbols-outlined text-gray-400 text-sm">lock</span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Navbar com Logo centralizada */}
       <nav className="sticky top-0 z-50 bg-cream/95 backdrop-blur-sm border-b border-black/5">
         <div className="flex items-center justify-between px-4 h-14">
           <button onClick={() => navigate(-1)} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5">
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
           
-          <h2 className="text-lg font-bold">@{profileUser?.username || targetUsername || '...'}</h2>
+          {/* Logo Fomí centralizada */}
+          <div className="absolute left-1/2 -translate-x-1/2">
+            <img 
+              src="/logo-fomi-vermelho.png" 
+              alt="Fomí" 
+              className="h-10"
+              onError={(e) => {
+                // Fallback para texto se logo não carregar
+                const parent = (e.target as HTMLImageElement).parentElement;
+                if (parent) {
+                  parent.innerHTML = '<span class="text-xl font-bold text-primary">fomí</span>';
+                }
+              }}
+            />
+          </div>
           
           {isCurrentUser ? (
             <button onClick={() => navigate('/settings')} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5">
@@ -629,16 +845,18 @@ export const Profile: React.FC = () => {
                   <img src="/selo-verificado.png" alt="Verificado" className="size-5" />
                 )}
               </div>
+
+              <p className="text-sm text-gray-500 mb-3">@{profileUser.username}</p>
               
               {(profileUser.city || profileUser.neighborhood) && (
-                <p className="text-xs text-gray-500 mb-5 flex items-center gap-1">
+                <p className="text-xs text-gray-500 mb-4 flex items-center gap-1">
                   <span className="material-symbols-outlined text-[14px]">location_on</span>
                   {profileUser.city} {profileUser.city && profileUser.neighborhood ? '•' : ''} {profileUser.neighborhood}
                 </p>
               )}
               
               {/* Stats */}
-              <div className="flex gap-10 mb-6">
+              <div className="flex gap-10 mb-5">
                 <div className="text-center">
                   <span className="block text-xl font-bold">{profileUser.reviews_count || 0}</span>
                   <span className="text-xs text-secondary">Reviews</span>
@@ -655,8 +873,11 @@ export const Profile: React.FC = () => {
                 </button>
               </div>
 
+              {/* Bio com destaque */}
               {profileUser.bio && (
-                <p className="text-center text-sm leading-relaxed max-w-xs">{profileUser.bio}</p>
+                <div className="bg-white/70 backdrop-blur-sm rounded-2xl px-5 py-4 w-full max-w-sm border border-black/5 shadow-sm">
+                  <p className="text-center text-sm text-dark leading-relaxed">{profileUser.bio}</p>
+                </div>
               )}
 
               {/* Action Buttons */}
@@ -688,112 +909,106 @@ export const Profile: React.FC = () => {
               </div>
             </section>
 
-            {/* Default List (Quero ir) */}
-            {(isCurrentUser || isFollowingProfile) && defaultList && (
-              <section className="px-5 space-y-4 mb-8 animate-fade-in">
-                <div 
-                  onClick={() => navigate(`/lists/${defaultList.id}`)}
-                  className="bg-white rounded-2xl p-4 flex items-center justify-between border border-black/5 shadow-sm active:scale-[0.98] transition-transform cursor-pointer"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="bg-primary/10 p-2 rounded-full text-primary">
-                      <span className="material-symbols-outlined filled">bookmark</span>
-                    </div>
-                    <span className="font-bold text-lg">{defaultList.name}</span>
-                  </div>
-                  <span className="text-secondary font-medium text-sm">{defaultList.count || 0} lugares</span>
-                </div>
-              </section>
-            )}
-            
-            {/* Lists Slider */}
+            {/* Lists Slider (Unificado - Quero ir + outras listas + botão adicionar) */}
             {(isCurrentUser || isFollowingProfile) && (
-              <section className="mt-4 px-5 mb-8 animate-fade-in">
+              <section className="mt-2 px-5 mb-8 animate-fade-in">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xl font-bold">Listas</h3>
+                  <h3 className="text-xl font-bold">Minhas Listas</h3>
                   <button onClick={() => navigate('/lists')} className="text-primary font-bold text-sm">Ver todas</button>
                 </div>
                 
-                {displayLists.length > 0 ? (
-                  <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
-                    {displayLists.map((list) => (
-                      <div 
-                        key={list.id} 
-                        onClick={() => navigate(`/lists/${list.id}`)}
-                        className="relative w-40 shrink-0 aspect-[4/5] rounded-2xl overflow-hidden group bg-gray-200 cursor-pointer active:scale-95 transition-transform"
-                      >
-                        <img 
-                          src={list.cover_photo_url || DEFAULT_RESTAURANT} 
-                          className="absolute inset-0 size-full object-cover" 
-                          alt={list.name}
-                          onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"></div>
-                        <div className="absolute bottom-4 left-4 text-white font-bold text-lg leading-tight">{list.name}</div>
-                        {list.is_private && (
-                          <div className="absolute top-2 right-2 text-white/70">
-                            <span className="material-symbols-outlined text-sm">lock</span>
-                          </div>
-                        )}
+                <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
+                  {/* Todas as listas (default primeiro) */}
+                  {allDisplayLists.map((list) => (
+                    <div 
+                      key={list.id} 
+                      onClick={() => navigate(`/lists/${list.id}`)}
+                      className="relative w-40 shrink-0 aspect-[4/5] rounded-2xl overflow-hidden group bg-gray-200 cursor-pointer active:scale-95 transition-transform"
+                    >
+                      <img 
+                        src={list.cover_photo_url || DEFAULT_RESTAURANT} 
+                        className="absolute inset-0 size-full object-cover" 
+                        alt={list.name}
+                        onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
+                      
+                      {/* Badge para lista default */}
+                      {list.is_default && (
+                        <div className="absolute top-2 left-2 bg-primary/90 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[12px] filled">bookmark</span>
+                          Quero ir
+                        </div>
+                      )}
+                      
+                      {list.is_private && !list.is_default && (
+                        <div className="absolute top-2 right-2 text-white/70">
+                          <span className="material-symbols-outlined text-sm">lock</span>
+                        </div>
+                      )}
+                      
+                      <div className="absolute bottom-4 left-4 right-4">
+                        <div className="text-white font-bold text-lg leading-tight mb-1">
+                          {list.is_default ? 'Quero ir' : list.name}
+                        </div>
+                        <div className="text-white/70 text-xs">{list.count || 0} lugares</div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div 
-                    onClick={() => navigate('/lists')}
-                    className="border-2 border-dashed border-gray-300 rounded-2xl p-6 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-3xl text-gray-400 mb-2">add_circle</span>
-                    <p className="text-gray-500 text-sm">Criar primeira lista</p>
-                  </div>
-                )}
+                    </div>
+                  ))}
+                  
+                  {/* Card de Adicionar Lista (sempre no final para o próprio usuário) */}
+                  {isCurrentUser && (
+                    <div 
+                      onClick={() => navigate('/lists')}
+                      className="w-40 shrink-0 aspect-[4/5] rounded-2xl bg-white border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-all active:scale-95 group"
+                    >
+                      <div className="size-12 rounded-full bg-primary flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                        <span className="material-symbols-outlined text-white text-2xl">add</span>
+                      </div>
+                      <span className="text-sm font-bold text-gray-600 group-hover:text-primary transition-colors">
+                        Criar nova lista
+                      </span>
+                    </div>
+                  )}
+                  
+                  {/* Se não tem nenhuma lista e não é o próprio usuário */}
+                  {!isCurrentUser && allDisplayLists.length === 0 && (
+                    <div className="w-full py-8 text-center text-gray-400 text-sm">
+                      Nenhuma lista pública disponível.
+                    </div>
+                  )}
+                </div>
               </section>
             )}
 
-            {/* Recent Activity */}
+            {/* Recent Activity (Estilo Beli) */}
             {(isCurrentUser || isFollowingProfile) && (
               <section className="px-5 mb-8 animate-fade-in">
                 <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">ATIVIDADE RECENTE</h3>
                 <div className="space-y-4">
                   {activities.map((activity) => (
-                    <div 
+                    <ActivityCard
                       key={activity.data.id}
-                      onClick={() => navigate('/feed')}
-                      className="border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-dark transition-colors bg-white/50 active:scale-[0.99]"
-                    >
-                      <div className="flex items-start gap-3">
-                        {activity.data.photos && activity.data.photos.length > 0 ? (
-                          <img 
-                            src={activity.data.photos[0].url} 
-                            className="size-16 rounded-lg object-cover bg-gray-200 shrink-0" 
-                            alt="Review"
-                            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
-                          />
-                        ) : (
-                          <div className="size-16 rounded-lg bg-gray-100 flex items-center justify-center shrink-0 text-gray-400">
-                            <span className="material-symbols-outlined">restaurant</span>
-                          </div>
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h4 className="font-bold text-dark truncate">{activity.data.restaurant?.name || 'Restaurante'}</h4>
-                            {activity.data.average_score && (
-                              <div className="flex items-center gap-0.5 text-yellow-500">
-                                <span className="material-symbols-outlined filled text-[14px]">star</span>
-                                <span className="text-xs font-bold">{activity.data.average_score.toFixed(1)}</span>
-                              </div>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-600 line-clamp-2 italic">"{activity.data.description}"</p>
-                          <p className="text-[10px] text-gray-400 mt-1">{new Date(activity.data.created_at).toLocaleDateString()}</p>
-                        </div>
-                      </div>
-                    </div>
+                      activity={activity}
+                      user={profileUser}
+                      onPhotoClick={() => navigate(`/review/${activity.data.id}`)}
+                      onSaveToList={handleOpenListSelector}
+                      onToggleWantToGo={handleToggleWantToGo}
+                    />
                   ))}
                   
                   {activities.length === 0 && (
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center text-gray-400 text-sm">
-                      Nenhuma atividade recente.
+                    <div className="bg-white rounded-2xl border-2 border-dashed border-gray-200 p-8 text-center">
+                      <span className="material-symbols-outlined text-4xl text-gray-300 mb-3">rate_review</span>
+                      <p className="text-gray-500 text-sm font-medium">Nenhuma atividade recente</p>
+                      {isCurrentUser && (
+                        <button 
+                          onClick={() => navigate('/feed')}
+                          className="mt-4 text-primary font-bold text-sm hover:underline"
+                        >
+                          Fazer primeira avaliação
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

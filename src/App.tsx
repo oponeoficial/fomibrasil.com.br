@@ -16,6 +16,7 @@ const ListDetails = lazy(() => import('./screens/ListDetails').then(m => ({ defa
 const Recommendations = lazy(() => import('./screens/Recommendations').then(m => ({ default: m.Recommendations })));
 const NewReview = lazy(() => import('./screens/NewReview').then(m => ({ default: m.NewReview })));
 const Notifications = lazy(() => import('./screens/Notifications').then(m => ({ default: m.Notifications })));
+const ReviewDetail = lazy(() => import('./screens/ReviewDetail').then(m => ({ default: m.ReviewDetail })));
 
 // Lazy load Navigation
 const BottomNav = lazy(() => import('./components/Navigation').then(m => ({ default: m.BottomNav })));
@@ -59,6 +60,9 @@ export default function App() {
                 <Register />
               </PublicRoute>
             } />
+            
+            {/* Review Detail - Pública (qualquer um pode ver via link compartilhado) */}
+            <Route path="/review/:reviewId" element={<ReviewDetail />} />
             
             {/* Onboarding - requer auth mas não requer onboarding completo */}
             <Route path="/onboarding" element={

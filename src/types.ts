@@ -67,6 +67,12 @@ export interface Review {
   photos: { url: string; order: number }[];
   created_at: string;
   
+  // Score fields (from database)
+  score_1?: number;
+  score_2?: number;
+  score_3?: number;
+  score_4?: number;
+  
   // Frontend helpers
   likes_count?: number;
   comments_count?: number;

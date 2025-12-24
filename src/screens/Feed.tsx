@@ -53,7 +53,6 @@ const CommentsModal: React.FC<{
   const [sending, setSending] = useState(false);
   const { currentUser, fetchComments, addComment } = useAppContext();
 
-  // Fetch comments when modal opens
   useEffect(() => {
     if (isOpen && review) {
       setLoadingComments(true);
@@ -98,7 +97,6 @@ const CommentsModal: React.FC<{
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-white rounded-t-3xl h-[75vh] flex flex-col shadow-2xl animate-slide-up">
-        {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-100">
            <span className="w-8"></span>
            <h3 className="font-bold text-dark">Comentários</h3>
@@ -107,9 +105,7 @@ const CommentsModal: React.FC<{
            </button>
         </div>
 
-        {/* List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
-           {/* Post Description as first item context */}
            <div className="flex gap-3 pb-4 border-b border-gray-50">
              <img 
                src={review.user?.profile_photo_url || DEFAULT_AVATAR} 
@@ -157,7 +153,6 @@ const CommentsModal: React.FC<{
            )}
         </div>
 
-        {/* Input */}
         <div className="p-4 border-t border-gray-100 bg-white pb-safe">
            <div className="flex items-center gap-3">
               <img 
@@ -324,9 +319,13 @@ const OptionsModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   review: Review | null;
-}> = ({ isOpen, onClose, review }) => {
+  onEdit: (review: Review) => void;
+  onDelete: (reviewId: string) => void;
+}> = ({ isOpen, onClose, review, onEdit, onDelete }) => {
   const [reportView, setReportView] = useState(false);
   const [reportReason, setReportReason] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { currentUser, supabase } = useAppContext();
 
   if (!isOpen || !review) return null;
@@ -348,6 +347,48 @@ const OptionsModal: React.FC<{
     setReportReason('');
   };
 
+  const handleDelete = async () => {
+    setDeleting(true);
+    await onDelete(review.id);
+    setDeleting(false);
+    setConfirmDelete(false);
+    onClose();
+  };
+
+  // Confirm Delete View
+  if (confirmDelete) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDelete(false)} />
+        <div className="relative bg-white rounded-3xl w-full max-w-sm shadow-2xl animate-bounce-in p-6 text-center">
+          <span className="material-symbols-outlined text-5xl text-red-500 mb-4">delete_forever</span>
+          <h3 className="font-bold text-lg mb-2">Excluir review?</h3>
+          <p className="text-gray-500 text-sm mb-6">Esta ação não pode ser desfeita.</p>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => setConfirmDelete(false)} 
+              className="flex-1 py-3 rounded-xl font-bold text-gray-500 border-2 border-gray-100"
+            >
+              Cancelar
+            </button>
+            <button 
+              onClick={handleDelete}
+              disabled={deleting}
+              className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {deleting ? (
+                <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+              ) : (
+                'Excluir'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Report View
   if (reportView) {
     return (
        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -380,9 +421,10 @@ const OptionsModal: React.FC<{
              </div>
           </div>
        </div>
-    )
+    );
   }
 
+  // Main Options View
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
@@ -391,10 +433,16 @@ const OptionsModal: React.FC<{
           
           {isMyPost ? (
             <>
-              <button className="w-full p-4 rounded-xl bg-gray-50 font-bold text-dark flex items-center gap-3 hover:bg-gray-100 transition-colors">
+              <button 
+                onClick={() => onEdit(review)}
+                className="w-full p-4 rounded-xl bg-gray-50 font-bold text-dark flex items-center gap-3 hover:bg-gray-100 transition-colors"
+              >
                  <span className="material-symbols-outlined">edit</span> Editar
               </button>
-              <button className="w-full p-4 rounded-xl bg-red-50 font-bold text-red-500 flex items-center gap-3 hover:bg-red-100 transition-colors">
+              <button 
+                onClick={() => setConfirmDelete(true)}
+                className="w-full p-4 rounded-xl bg-red-50 font-bold text-red-500 flex items-center gap-3 hover:bg-red-100 transition-colors"
+              >
                  <span className="material-symbols-outlined">delete</span> Excluir
               </button>
             </>
@@ -417,7 +465,7 @@ const OptionsModal: React.FC<{
 
 export const Feed: React.FC = () => {
   const navigate = useNavigate();
-  const { reviews, toggleSaveRestaurant, toggleLike, following, refreshFeed, loading, currentUser } = useAppContext();
+  const { reviews, toggleSaveRestaurant, toggleLike, following, refreshFeed, loading, currentUser, supabase } = useAppContext();
   
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'For You' | 'Friends'>('For You');
@@ -512,33 +560,61 @@ export const Feed: React.FC = () => {
     else showToast('Removido de Quero ir');
   };
 
-  const handleShare = async () => {
-    if (navigator.share) {
-        try {
-            await navigator.share({
-                title: 'Review no Fomí',
-                text: 'Olha que lugar incrível!',
-                url: window.location.href
-            });
-        } catch (e) { console.log('Share aborted'); }
-    } else {
-        navigator.clipboard.writeText(window.location.href);
-        showToast('Link copiado!');
+  const handleShare = (review: Review) => {
+    const postUrl = `${window.location.origin}/review/${review.id}`;
+    const message = `Acabei de ver esse post no app da Fomí e lembrei de você: ${postUrl}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const handleEditReview = (review: Review) => {
+    // Navegar para tela de edição com dados da review
+    navigate('/new-review', { state: { editReview: review } });
+  };
+
+  const handleDeleteReview = async (reviewId: string) => {
+    try {
+      // Soft delete - marca como inativo
+      const { error } = await supabase
+        .from('reviews')
+        .update({ is_active: false })
+        .eq('id', reviewId);
+
+      if (error) {
+        showToast('Erro ao excluir');
+        return;
+      }
+
+      showToast('Review excluída');
+      await refreshFeed();
+    } catch (err) {
+      console.error('Erro ao excluir:', err);
+      showToast('Erro ao excluir');
     }
   };
 
   const getActiveReview = () => reviews.find(r => r.id === activeReviewId) || null;
 
-  const formatDate = (dateStr: string) => {
+  const formatTimeAgo = (dateStr: string) => {
     const date = new Date(dateStr);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
-    if (diffDays === 0) return 'Hoje';
-    if (diffDays === 1) return 'Ontem';
+    if (diffMins < 1) return 'agora';
+    if (diffMins < 60) return `${diffMins} min`;
+    if (diffHours < 24) return `${diffHours}h`;
+    if (diffDays === 1) return 'ontem';
     if (diffDays < 7) return `${diffDays}d`;
     return date.toLocaleDateString('pt-BR');
+  };
+
+  const getReviewTypeLabel = (reviewType: string | undefined) => {
+    if (reviewType === 'delivery') return 'Delivery';
+    if (reviewType === 'in_person') return 'Presencial';
+    return 'Presencial';
   };
 
   const handlePhotoScroll = (reviewId: string, e: React.UIEvent<HTMLDivElement>) => {
@@ -547,6 +623,10 @@ export const Feed: React.FC = () => {
     const width = container.offsetWidth;
     const index = Math.round(scrollLeft / width);
     setPhotoIndexes(prev => ({ ...prev, [reviewId]: index }));
+  };
+
+  const hasPhotos = (review: Review) => {
+    return review.photos && review.photos.length > 0;
   };
 
   return (
@@ -578,7 +658,9 @@ export const Feed: React.FC = () => {
       <OptionsModal 
         isOpen={modalType === 'options'} 
         onClose={() => setModalType(null)} 
-        review={getActiveReview()} 
+        review={getActiveReview()}
+        onEdit={handleEditReview}
+        onDelete={handleDeleteReview}
       />
 
       {/* Header */}
@@ -651,6 +733,7 @@ export const Feed: React.FC = () => {
         ) : (
            displayedReviews.map((review) => {
              const currentPhotoIndex = photoIndexes[review.id] || 0;
+             const showPhotos = hasPhotos(review);
              
              return (
                <article key={review.id} className="bg-white rounded-3xl shadow-sm border border-black/5 overflow-hidden animate-fade-in">
@@ -667,58 +750,72 @@ export const Feed: React.FC = () => {
                          <div className="flex items-center gap-1">
                            <p className="font-bold text-sm text-dark">{review.user?.username}</p>
                            {review.user?.is_verified && (
-  <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
-)}
+                             <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
+                           )}
                          </div>
                          <p className="text-xs text-gray-500 flex items-center gap-1">
                            {review.restaurant?.name} 
-                           <span className="text-[10px]">•</span> 
-                           {formatDate(review.created_at)}
+                           <span className="text-[10px]">•</span>
+                           {getReviewTypeLabel(review.review_type)}
+                           <span className="text-[10px]">•</span>
+                           {formatTimeAgo(review.created_at)}
                          </p>
                       </div>
                    </div>
-                   <button onClick={() => { setActiveReviewId(review.id); setModalType('options'); }} className="text-gray-400 hover:text-dark p-1">
-                      <span className="material-symbols-outlined">more_horiz</span>
-                   </button>
+                   <div className="flex flex-col items-end gap-1">
+                     <button onClick={() => { setActiveReviewId(review.id); setModalType('options'); }} className="text-gray-400 hover:text-dark p-1">
+                        <span className="material-symbols-outlined">more_horiz</span>
+                     </button>
+                     {/* Rating badge for text-only posts - appears below ... */}
+                     {!showPhotos && (
+                       <div className="flex items-center gap-1 bg-yellow-50 px-2 py-1 rounded-full">
+                         <span className="text-yellow-500 text-xs font-bold">{review.average_score?.toFixed(1) || '0.0'}</span>
+                         <span className="text-yellow-400 text-xs">★</span>
+                       </div>
+                     )}
+                   </div>
                  </div>
 
-                 {/* Photo Carousel (Snap) */}
-                 <div className="relative w-full aspect-[4/5] bg-gray-100">
-                    <div 
-                      className="w-full h-full overflow-x-auto snap-x snap-mandatory flex no-scrollbar"
-                      onScroll={(e) => handlePhotoScroll(review.id, e)}
-                    >
-                      {review.photos && review.photos.length > 0 ? (
-                        review.photos.map((photo, idx) => (
+                 {/* Photo Carousel - Only if has photos */}
+                 {showPhotos ? (
+                   <div className="relative w-full aspect-[4/5] bg-gray-100">
+                      <div 
+                        className="w-full h-full overflow-x-auto snap-x snap-mandatory flex no-scrollbar"
+                        onScroll={(e) => handlePhotoScroll(review.id, e)}
+                      >
+                        {review.photos!.map((photo, idx) => (
                            <img 
                              key={idx} 
                              src={photo.url} 
                              className="w-full h-full object-cover shrink-0 snap-center" 
                              alt="Review" 
                            />
-                        ))
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-gray-200">
-                          <span className="material-symbols-outlined text-4xl text-gray-400">image</span>
-                        </div>
+                        ))}
+                      </div>
+                      
+                      <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm px-2 py-1 rounded-full text-white text-xs font-bold">
+                         {review.average_score?.toFixed(1) || '0.0'} <span className="text-yellow-400">★</span>
+                      </div>
+                      
+                      {review.photos!.length > 1 && (
+                         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+                            {review.photos!.map((_, i) => (
+                               <div 
+                                 key={i} 
+                                 className={`size-1.5 rounded-full transition-colors ${i === currentPhotoIndex ? 'bg-white' : 'bg-white/50'}`} 
+                               />
+                            ))}
+                         </div>
                       )}
-                    </div>
-                    
-                    <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm px-2 py-1 rounded-full text-white text-xs font-bold">
-                       {review.average_score?.toFixed(1) || '0.0'} <span className="text-yellow-400">★</span>
-                    </div>
-                    
-                    {review.photos && review.photos.length > 1 && (
-                       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
-                          {review.photos.map((_, i) => (
-                             <div 
-                               key={i} 
-                               className={`size-1.5 rounded-full transition-colors ${i === currentPhotoIndex ? 'bg-white' : 'bg-white/50'}`} 
-                             />
-                          ))}
-                       </div>
-                    )}
-                 </div>
+                   </div>
+                 ) : (
+                   /* Tweet-style: Description directly, no gray area */
+                   <div className="px-4 pb-3">
+                     <p className="text-[15px] text-dark leading-relaxed whitespace-pre-wrap">
+                       {review.description}
+                     </p>
+                   </div>
+                 )}
 
                  {/* Actions Bar */}
                  <div className="px-4 py-3 flex items-center justify-between">
@@ -729,7 +826,7 @@ export const Feed: React.FC = () => {
                        <button onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }} className="flex items-center gap-1 group">
                           <span className="material-symbols-outlined text-[26px] text-dark group-hover:text-primary transition-colors">chat_bubble</span>
                        </button>
-                       <button onClick={handleShare} className="flex items-center gap-1 group">
+                       <button onClick={() => handleShare(review)} className="flex items-center gap-1 group">
                           <span className="material-symbols-outlined text-[26px] text-dark group-hover:text-primary transition-colors">send</span>
                        </button>
                     </div>
@@ -738,22 +835,39 @@ export const Feed: React.FC = () => {
                     </button>
                  </div>
                  
-                 {/* Description */}
-                 <div className="px-4 pb-5">
-                    <div className="text-sm font-bold text-dark mb-1">{review.likes_count || 0} curtidas</div>
-                    <p className="text-sm text-dark leading-relaxed">
-                       <span className="font-bold mr-2">{review.user?.username}</span>
-                       {review.description}
-                    </p>
-                    {(review.comments_count || 0) > 0 && (
-                      <button 
-                        onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }}
-                        className="text-gray-500 text-xs mt-2 font-medium"
-                      >
-                        Ver todos os {review.comments_count} comentários
-                      </button>
-                    )}
-                 </div>
+                 {/* Description - Only shown when there are photos */}
+                 {showPhotos && (
+                   <div className="px-4 pb-5">
+                      <div className="text-sm font-bold text-dark mb-1">{review.likes_count || 0} curtidas</div>
+                      <p className="text-sm text-dark leading-relaxed">
+                         <span className="font-bold mr-2">{review.user?.username}</span>
+                         {review.description}
+                      </p>
+                      {(review.comments_count || 0) > 0 && (
+                        <button 
+                          onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }}
+                          className="text-gray-500 text-xs mt-2 font-medium"
+                        >
+                          Ver todos os {review.comments_count} comentários
+                        </button>
+                      )}
+                   </div>
+                 )}
+
+                 {/* Likes & Comments for text-only posts */}
+                 {!showPhotos && (
+                   <div className="px-4 pb-5 pt-0">
+                      <div className="text-sm font-bold text-dark mb-1">{review.likes_count || 0} curtidas</div>
+                      {(review.comments_count || 0) > 0 && (
+                        <button 
+                          onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }}
+                          className="text-gray-500 text-xs font-medium"
+                        >
+                          Ver todos os {review.comments_count} comentários
+                        </button>
+                      )}
+                   </div>
+                 )}
 
                </article>
              );

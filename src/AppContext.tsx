@@ -28,8 +28,10 @@ interface AppContextType {
   updateList: (listId: string, updates: { name?: string; is_private?: boolean; cover_photo_url?: string }) => Promise<void>;
   deleteList: (listId: string) => Promise<void>;
   searchRestaurants: (query: string) => Promise<Restaurant[]>;
+  searchRestaurantsWithGoogle: (query: string) => Promise<Restaurant[]>;
   getRestaurantsByIds: (ids: string[]) => Promise<Restaurant[]>;
   getFollowingUsers: () => Promise<User[]>;
+  getMutualFollowers: () => Promise<User[]>;
   uploadReviewPhotos: (files: File[], reviewId: string) => Promise<string[]>;
   addReview: (data: any) => Promise<string | null>;
   fetchComments: (reviewId: string) => Promise<Comment[]>;
@@ -134,6 +136,135 @@ const AppContextInner: React.FC<{ children: ReactNode }> = ({ children }) => {
     return followHook.getFollowingUsers(auth.currentUser.id);
   }, [auth.currentUser?.id, followHook]);
 
+  const getMutualFollowers = useCallback(async (): Promise<User[]> => {
+    if (!auth.currentUser?.id) return [];
+    return followHook.getMutualFollowers(auth.currentUser.id);
+  }, [auth.currentUser?.id, followHook]);
+
+  // Busca de restaurantes com fallback para Google Places
+  const searchRestaurantsWithGoogle = useCallback(async (query: string): Promise<Restaurant[]> => {
+    if (!query || query.length < 3) return [];
+
+    try {
+      // Buscar na base local via RPC (otimizado)
+      const { data: localResults, error } = await supabase.rpc('search_restaurants', {
+        search_term: query,
+        cuisine_filter: null,
+        price_filter: null,
+        min_rating: null,
+        user_lat: -8.0476,
+        user_lng: -34.8770,
+        sort_by: 'distance',
+        page_limit: 10,
+        page_offset: 0,
+      });
+
+      if (error) console.error('Erro na busca local:', error);
+
+      const results: Restaurant[] = (localResults || []) as Restaurant[];
+
+      // Se poucos resultados, buscar no Google
+      if (results.length < 3) {
+        console.log('🔍 Buscando no Google Places...');
+        
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+        
+        try {
+          const response = await fetch(`${supabaseUrl}/functions/v1/google-places`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({ action: 'search', query, location: 'Recife, PE' }),
+          });
+
+          const { success, data } = await response.json();
+          
+          if (success && data) {
+            // Verificar se já existe
+            const { data: existing } = await supabase
+              .from('restaurants')
+              .select('*')
+              .eq('google_place_id', data.place_id)
+              .maybeSingle();
+
+            if (existing) {
+              const isDuplicate = results.some(r => r.id === existing.id);
+              if (!isDuplicate) results.unshift(existing as Restaurant);
+            } else {
+              // Buscar detalhes e salvar
+              const detailsResponse = await fetch(`${supabaseUrl}/functions/v1/google-places`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${supabaseKey}`,
+                },
+                body: JSON.stringify({ action: 'details', place_id: data.place_id }),
+              });
+
+              const detailsResult = await detailsResponse.json();
+              
+              if (detailsResult.success && detailsResult.data) {
+                const details = detailsResult.data;
+
+                const { data: newId, error: insertError } = await supabase.rpc('save_google_restaurant', {
+                  p_google_place_id: details.place_id,
+                  p_name: details.name,
+                  p_address: details.address,
+                  p_city: 'Recife',
+                  p_latitude: details.location?.lat,
+                  p_longitude: details.location?.lng,
+                  p_phone: details.phone || null,
+                  p_website: details.website || null,
+                  p_google_maps_url: details.google_maps_url || null,
+                  p_photo_url: details.photos?.[0]?.url || null,
+                  p_cuisine_types: ['Restaurante'],
+                  p_price_level: details.price_level || null,
+                  p_opening_hours: details.opening_hours || null,
+                  p_is_open_now: details.is_open_now ?? null,
+                });
+
+                if (!insertError && newId) {
+                  console.log('✅ Novo restaurante salvo:', details.name);
+                  
+                  const { data: inserted } = await supabase
+                    .from('restaurants')
+                    .select('*')
+                    .eq('id', newId)
+                    .single();
+
+                  if (inserted) results.unshift(inserted as Restaurant);
+                } else {
+                  results.unshift({
+                    id: crypto.randomUUID(),
+                    google_place_id: details.place_id,
+                    name: details.name,
+                    address: details.address,
+                    city: 'Recife',
+                    latitude: details.location?.lat,
+                    longitude: details.location?.lng,
+                    photo_url: details.photos?.[0]?.url || '',
+                    cuisine_types: ['Restaurante'],
+                    price_level: details.price_level,
+                  } as Restaurant);
+                }
+              }
+            }
+          }
+        } catch (googleError) {
+          console.error('Erro na busca Google:', googleError);
+        }
+      }
+
+      return results;
+    } catch (err) {
+      console.error('Erro geral na busca:', err);
+      return [];
+    }
+  }, [supabase]);
+
   const value: AppContextType = {
     supabase,
     session: auth.session,
@@ -154,8 +285,10 @@ const AppContextInner: React.FC<{ children: ReactNode }> = ({ children }) => {
     updateList: listsHook.updateList,
     deleteList: listsHook.deleteList,
     searchRestaurants: listsHook.searchRestaurants,
+    searchRestaurantsWithGoogle,
     getRestaurantsByIds: listsHook.getRestaurantsByIds,
     getFollowingUsers,
+    getMutualFollowers,
     uploadReviewPhotos,
     addReview,
     fetchComments: feed.fetchComments,

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Restaurant, User } from '../types';
+import { Restaurant, User, Review } from '../types';
 import { useAppContext } from '../AppContext';
 import { DEFAULT_AVATAR, DEFAULT_RESTAURANT } from '../constants';
 
@@ -8,27 +8,27 @@ type ReviewType = 'presencial' | 'delivery';
 
 interface PhotoItem {
   id: string;
-  file: File;
+  file?: File;
   preview: string;
+  isExisting?: boolean; // Para fotos que já existem na review
 }
 
 export const NewReview: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { addReview, searchRestaurants, getFollowingUsers, currentUser } = useAppContext();
+  const { addReview, searchRestaurantsWithGoogle, getMutualFollowers, supabase, refreshFeed } = useAppContext();
+  
+  // --- EDIT MODE ---
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editReviewId, setEditReviewId] = useState<string | null>(null);
   
   // --- STATE ---
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2>(1);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
 
-  // STEP 1: Photos
-  const [selectedPhotos, setSelectedPhotos] = useState<PhotoItem[]>([]);
-  const [draggedItemIndex, setDraggedItemIndex] = useState<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // STEP 2: Info
+  // STEP 1: Info
   const [restaurantQuery, setRestaurantQuery] = useState('');
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [showRestaurantDropdown, setShowRestaurantDropdown] = useState(false);
@@ -36,16 +36,18 @@ export const NewReview: React.FC = () => {
   const [restaurantResults, setRestaurantResults] = useState<Restaurant[]>([]);
   const [noResultsFound, setNoResultsFound] = useState(false);
   
-  const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  
+  const [selectedPhotos, setSelectedPhotos] = useState<PhotoItem[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [taggedUsers, setTaggedUsers] = useState<User[]>([]);
   const [showTagModal, setShowTagModal] = useState(false);
   const [tagSearchQuery, setTagSearchQuery] = useState('');
-  const [followingUsers, setFollowingUsers] = useState<User[]>([]);
-  const [loadingFollowing, setLoadingFollowing] = useState(false);
+  const [friendsList, setFriendsList] = useState<User[]>([]);
+  const [loadingFriends, setLoadingFriends] = useState(false);
 
-  // STEP 3: Evaluation
+  // STEP 2: Evaluation
   const [reviewType, setReviewType] = useState<ReviewType>('presencial');
   const [scores, setScores] = useState({
     proposta: 5.0,
@@ -57,9 +59,54 @@ export const NewReview: React.FC = () => {
     qualidadeComida: 5.0
   });
 
-  // Check for passed restaurant state
+  // Check for edit mode or passed restaurant state
   useEffect(() => {
-    if (location.state?.restaurant) {
+    if (location.state?.editReview) {
+      const review = location.state.editReview as Review;
+      setIsEditMode(true);
+      setEditReviewId(review.id);
+      
+      // Preencher restaurante
+      if (review.restaurant) {
+        setSelectedRestaurant(review.restaurant);
+        setRestaurantQuery(review.restaurant.name);
+      }
+      
+      // Preencher descrição
+      setDescription(review.description || '');
+      
+      // Preencher tipo
+      setReviewType(review.review_type === 'delivery' ? 'delivery' : 'presencial');
+      
+      // Preencher fotos existentes
+      if (review.photos && review.photos.length > 0) {
+        const existingPhotos: PhotoItem[] = review.photos.map((photo, idx) => ({
+          id: `existing-${idx}`,
+          preview: photo.url,
+          isExisting: true
+        }));
+        setSelectedPhotos(existingPhotos);
+      }
+      
+      // Preencher scores (mapear de volta para os campos)
+      if (review.review_type === 'delivery') {
+        setScores(prev => ({
+          ...prev,
+          embalagem: review.score_1 || 5.0,
+          tempoEntrega: review.score_2 || 5.0,
+          qualidadeComida: review.score_3 || 5.0,
+          apresentacao: review.score_4 || 5.0
+        }));
+      } else {
+        setScores(prev => ({
+          ...prev,
+          proposta: review.score_1 || 5.0,
+          comida: review.score_2 || 5.0,
+          apresentacao: review.score_3 || 5.0,
+          atendimento: review.score_4 || 5.0
+        }));
+      }
+    } else if (location.state?.restaurant) {
       const r = location.state.restaurant as Restaurant;
       setSelectedRestaurant(r);
       setRestaurantQuery(r.name);
@@ -77,27 +124,34 @@ export const NewReview: React.FC = () => {
     const timer = setTimeout(async () => {
       setSearchingRestaurants(true);
       setNoResultsFound(false);
-      const results = await searchRestaurants(restaurantQuery);
-      setRestaurantResults(results);
-      setNoResultsFound(results.length === 0);
+      
+      try {
+        const results = await searchRestaurantsWithGoogle(restaurantQuery);
+        setRestaurantResults(results);
+        setNoResultsFound(results.length === 0);
+      } catch (err) {
+        console.error('Erro na busca:', err);
+        setNoResultsFound(true);
+      }
+      
       setSearchingRestaurants(false);
-    }, 300);
+    }, 400);
 
     return () => clearTimeout(timer);
-  }, [restaurantQuery, searchRestaurants]);
+  }, [restaurantQuery, searchRestaurantsWithGoogle]);
 
-  // Load following users when tag modal opens
+  // Load friends when tag modal opens
   useEffect(() => {
-    if (showTagModal && followingUsers.length === 0) {
-      loadFollowingUsers();
+    if (showTagModal && friendsList.length === 0) {
+      loadFriends();
     }
   }, [showTagModal]);
 
-  const loadFollowingUsers = async () => {
-    setLoadingFollowing(true);
-    const users = await getFollowingUsers();
-    setFollowingUsers(users);
-    setLoadingFollowing(false);
+  const loadFriends = async () => {
+    setLoadingFriends(true);
+    const users = await getMutualFollowers();
+    setFriendsList(users);
+    setLoadingFriends(false);
   };
 
   // --- HELPERS ---
@@ -107,19 +161,21 @@ export const NewReview: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const isQuickPost = selectedPhotos.length === 0;
+
   const getCriteria = () => {
     if (reviewType === 'presencial') {
       return [
-        { key: 'proposta', label: 'Proposta', dbKey: 'score_1' },
         { key: 'comida', label: 'Comida', dbKey: 'score_2' },
+        { key: 'proposta', label: 'Proposta', dbKey: 'score_1' },
         { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_3' },
         { key: 'atendimento', label: 'Atendimento', dbKey: 'score_4' }
       ];
     } else {
       return [
+        { key: 'qualidadeComida', label: 'Qualidade da comida', dbKey: 'score_3' },
         { key: 'embalagem', label: 'Embalagem', dbKey: 'score_1' },
         { key: 'tempoEntrega', label: 'Tempo de entrega', dbKey: 'score_2' },
-        { key: 'qualidadeComida', label: 'Qualidade da comida', dbKey: 'score_3' },
         { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_4' }
       ];
     }
@@ -134,12 +190,10 @@ export const NewReview: React.FC = () => {
   // --- ACTIONS: NAVIGATION ---
 
   const handleBack = () => {
-    if (step === 3) {
-      setStep(2);
-    } else if (step === 2) {
+    if (step === 2) {
       setStep(1);
     } else {
-      if (selectedPhotos.length > 0) {
+      if (selectedRestaurant || description || selectedPhotos.length > 0) {
         setShowDiscardModal(true);
       } else {
         navigate(-1);
@@ -154,22 +208,15 @@ export const NewReview: React.FC = () => {
 
   const handleNext = () => {
     if (step === 1) {
-      if (selectedPhotos.length === 0) return;
-      setStep(2);
-    } else if (step === 2) {
       if (!selectedRestaurant) {
         showToast("Selecione um restaurante");
         return;
       }
-      if (title.length < 1 || title.length > 100) {
-        showToast("Título inválido (1-100 caracteres)");
+      if (!description.trim()) {
+        showToast("Adicione uma descrição");
         return;
       }
-      if (description.length < 1 || description.length > 700) {
-        showToast("Descrição inválida (1-700 caracteres)");
-        return;
-      }
-      setStep(3);
+      setStep(2);
     }
   };
 
@@ -180,31 +227,70 @@ export const NewReview: React.FC = () => {
     try {
       const criteria = getCriteria();
       
-      const reviewData = {
-        restaurantId: selectedRestaurant?.id,
-        title,
-        description,
-        reviewType,
-        scores: {
+      if (isEditMode && editReviewId) {
+        // --- MODO EDIÇÃO: Update da review existente ---
+        const existingPhotos = selectedPhotos.filter(p => p.isExisting);
+        
+        const updateData: any = {
+          description: description.trim(),
+          review_type: reviewType === 'presencial' ? 'in_person' : 'delivery',
           score_1: scores[criteria[0].key as keyof typeof scores],
           score_2: scores[criteria[1].key as keyof typeof scores],
           score_3: scores[criteria[2].key as keyof typeof scores],
-          score_4: scores[criteria[3].key as keyof typeof scores]
-        },
-        photoFiles: selectedPhotos.map(p => p.file),
-        taggedUserIds: taggedUsers.map(u => u.id)
-      };
+          score_4: scores[criteria[3].key as keyof typeof scores],
+          photos: existingPhotos.map((p, i) => ({ url: p.preview, order: i + 1 })),
+          updated_at: new Date().toISOString()
+        };
 
-      const reviewId = await addReview(reviewData);
+        // Se mudou o restaurante
+        if (selectedRestaurant?.id) {
+          updateData.restaurant_id = selectedRestaurant.id;
+        }
 
-      if (reviewId) {
-        // Cleanup previews
-        selectedPhotos.forEach(p => URL.revokeObjectURL(p.preview));
-        showToast("Review publicada!");
+        const { error } = await supabase
+          .from('reviews')
+          .update(updateData)
+          .eq('id', editReviewId);
+
+        if (error) {
+          console.error('Erro ao atualizar review:', error);
+          showToast("Erro ao atualizar. Tente novamente.");
+          setPosting(false);
+          return;
+        }
+
+        showToast("Review atualizada!");
+        await refreshFeed();
         setTimeout(() => navigate('/feed'), 1500);
+
       } else {
-        showToast("Erro ao publicar. Tente novamente.");
-        setPosting(false);
+        // --- MODO CRIAÇÃO: Nova review ---
+        const reviewData = {
+          restaurantId: selectedRestaurant?.id,
+          title: selectedRestaurant?.name || 'Review',
+          description: description.trim(),
+          reviewType,
+          scores: {
+            score_1: scores[criteria[0].key as keyof typeof scores],
+            score_2: scores[criteria[1].key as keyof typeof scores],
+            score_3: scores[criteria[2].key as keyof typeof scores],
+            score_4: scores[criteria[3].key as keyof typeof scores]
+          },
+          photoFiles: selectedPhotos.filter(p => p.file).map(p => p.file!),
+          taggedUserIds: taggedUsers.map(u => u.id),
+          isQuickPost
+        };
+
+        const reviewId = await addReview(reviewData);
+
+        if (reviewId) {
+          selectedPhotos.forEach(p => URL.revokeObjectURL(p.preview));
+          showToast("Review publicada!");
+          setTimeout(() => navigate('/feed'), 1500);
+        } else {
+          showToast("Erro ao publicar. Tente novamente.");
+          setPosting(false);
+        }
       }
     } catch (error) {
       console.error('Erro ao postar review:', error);
@@ -213,11 +299,14 @@ export const NewReview: React.FC = () => {
     }
   };
 
-  // --- ACTIONS: STEP 1 (PHOTOS) ---
+  // --- ACTIONS: PHOTOS ---
 
   const handleRemovePhoto = (index: number) => {
     const photo = selectedPhotos[index];
-    URL.revokeObjectURL(photo.preview);
+    // Só revogar URL se não for foto existente (é blob URL)
+    if (!photo.isExisting) {
+      URL.revokeObjectURL(photo.preview);
+    }
     setSelectedPhotos(prev => prev.filter((_, i) => i !== index));
   };
 
@@ -246,20 +335,7 @@ export const NewReview: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const onDragStart = (index: number) => setDraggedItemIndex(index);
-  const onDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (draggedItemIndex === null || draggedItemIndex === index) return;
-    const newPhotos = [...selectedPhotos];
-    const draggedItem = newPhotos[draggedItemIndex];
-    newPhotos.splice(draggedItemIndex, 1);
-    newPhotos.splice(index, 0, draggedItem);
-    setSelectedPhotos(newPhotos);
-    setDraggedItemIndex(index);
-  };
-  const onDragEnd = () => setDraggedItemIndex(null);
-
-  // --- ACTIONS: STEP 2 (INFO) ---
+  // --- ACTIONS: RESTAURANT ---
 
   const handleSelectRestaurant = (r: Restaurant) => {
     setSelectedRestaurant(r);
@@ -268,13 +344,15 @@ export const NewReview: React.FC = () => {
     setNoResultsFound(false);
   };
 
-  const filteredUsersToTag = useMemo(() => {
-    if (!tagSearchQuery) return followingUsers;
+  // --- ACTIONS: TAGS ---
+
+  const filteredFriendsToTag = useMemo(() => {
+    if (!tagSearchQuery) return friendsList;
     const lower = tagSearchQuery.toLowerCase();
-    return followingUsers.filter(u => 
+    return friendsList.filter(u => 
       u.full_name?.toLowerCase().includes(lower) || u.username?.toLowerCase().includes(lower)
     );
-  }, [tagSearchQuery, followingUsers]);
+  }, [tagSearchQuery, friendsList]);
 
   const toggleTagUser = (user: User) => {
     if (taggedUsers.find(u => u.id === user.id)) {
@@ -284,137 +362,17 @@ export const NewReview: React.FC = () => {
     }
   };
   
-  // --- ACTIONS: STEP 3 (EVALUATION) ---
+  // --- ACTIONS: SCORES ---
   
   const handleScoreChange = (key: string, value: number) => {
     setScores(prev => ({ ...prev, [key]: value }));
   };
 
-  // --- RENDERS ---
+  // --- RENDER STEP 1 ---
 
   const renderStep1 = () => (
-    <div className="p-6">
-      {/* Selected Photos */}
-      <div className="mb-8">
-        <div className="flex justify-between items-end mb-2">
-          <h2 className="text-sm font-bold text-secondary uppercase tracking-wider">
-            Fotos selecionadas ({selectedPhotos.length}/5)
-          </h2>
-          {selectedPhotos.length > 0 && (
-            <span className="text-[10px] text-gray-400">Arraste para ordenar</span>
-          )}
-        </div>
-        <div className="flex gap-3 overflow-x-auto no-scrollbar py-2">
-          {Array.from({ length: 5 }).map((_, i) => {
-            const photo = selectedPhotos[i];
-            if (photo) {
-              return (
-                <div 
-                  key={photo.id}
-                  draggable
-                  onDragStart={() => onDragStart(i)}
-                  onDragOver={(e) => onDragOver(e, i)}
-                  onDragEnd={onDragEnd}
-                  className={`relative size-24 shrink-0 rounded-2xl overflow-hidden border border-black/5 shadow-sm transition-transform ${
-                    draggedItemIndex === i ? 'opacity-50 scale-90' : 'opacity-100'
-                  }`}
-                >
-                  <img src={photo.preview} className="w-full h-full object-cover" alt="Selected" />
-                  <button 
-                    onClick={() => handleRemovePhoto(i)}
-                    className="absolute top-1 right-1 bg-black/50 text-white rounded-full size-6 flex items-center justify-center hover:bg-red-500 transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">close</span>
-                  </button>
-                  <div className="absolute bottom-1 left-1 bg-black/40 px-1.5 rounded text-[10px] text-white font-bold">
-                    {i + 1}
-                  </div>
-                </div>
-              );
-            } else {
-              return (
-                <div 
-                  key={`empty-${i}`} 
-                  className="size-24 shrink-0 rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center bg-gray-50/50"
-                >
-                  {i === selectedPhotos.length ? (
-                    <span className="material-symbols-outlined text-gray-300">add_photo_alternate</span>
-                  ) : (
-                    <span className="text-gray-200 text-xs font-bold">{i + 1}</span>
-                  )}
-                </div>
-              );
-            }
-          })}
-        </div>
-      </div>
-
-      <div className="h-px bg-black/5 w-full mb-8"></div>
-
-      {/* Upload Options */}
-      <div className="space-y-4">
-        <h2 className="text-xl font-bold">Adicionar fotos</h2>
-        
-        <input 
-          type="file" 
-          accept="image/*" 
-          capture="environment"
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          multiple
-          className="hidden"
-        />
-
-        {/* Camera Button */}
-        <button 
-          onClick={() => {
-            if (selectedPhotos.length >= 5) {
-              showToast("Máximo de 5 fotos atingido");
-            } else {
-              fileInputRef.current?.click();
-            }
-          }}
-          className="w-full h-14 bg-dark text-white rounded-2xl font-bold text-lg shadow-xl flex items-center justify-center gap-3 active:scale-[0.98] transition-transform"
-        >
-          <span className="material-symbols-outlined filled">photo_camera</span>
-          TIRAR FOTO
-        </button>
-
-        {/* Gallery Button */}
-        <button 
-          onClick={() => {
-            if (selectedPhotos.length >= 5) {
-              showToast("Máximo de 5 fotos atingido");
-            } else {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = 'image/*';
-              input.multiple = true;
-              input.onchange = (e) => {
-                const target = e.target as HTMLInputElement;
-                if (target.files) {
-                  handleFileChange({ target } as React.ChangeEvent<HTMLInputElement>);
-                }
-              };
-              input.click();
-            }
-          }}
-          className="w-full h-14 bg-white text-dark border-2 border-gray-200 rounded-2xl font-bold text-lg shadow-sm flex items-center justify-center gap-3 active:scale-[0.98] transition-transform hover:border-primary"
-        >
-          <span className="material-symbols-outlined">photo_library</span>
-          ESCOLHER DA GALERIA
-        </button>
-
-        <p className="text-center text-xs text-gray-400 mt-4">
-          Máximo 5 fotos • 10MB por foto
-        </p>
-      </div>
-    </div>
-  );
-
-  const renderStep2 = () => (
     <div className="p-6 space-y-6">
-        
+      
       {/* Restaurant Input */}
       <div className="space-y-2 relative">
         <label className="text-sm font-bold ml-1 flex items-center gap-1">
@@ -450,6 +408,7 @@ export const NewReview: React.FC = () => {
               {searchingRestaurants ? (
                 <div className="p-4 text-center">
                   <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
+                  <p className="text-xs text-gray-400 mt-2">Pesquisando restaurantes...</p>
                 </div>
               ) : restaurantResults.length > 0 ? (
                 restaurantResults.map(r => (
@@ -503,22 +462,77 @@ export const NewReview: React.FC = () => {
         )}
       </div>
 
-      {/* Title Input */}
-      <div className="space-y-2">
-        <label className="text-sm font-bold ml-1 flex items-center gap-1">
-          Título <span className="text-primary">*</span>
-        </label>
+      {/* Photos Section */}
+      <div className="space-y-3">
+        <label className="text-sm font-bold ml-1">Fotos</label>
+        
         <input 
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          maxLength={100}
-          placeholder="Ex: A melhor pizza da cidade"
-          className="w-full h-12 px-4 rounded-xl border-2 border-gray-200 bg-white outline-none font-medium focus:border-primary shadow-sm transition-colors"
+          type="file" 
+          accept="image/*" 
+          ref={fileInputRef}
+          onChange={handleFileChange}
+          multiple
+          className="hidden"
         />
-        <div className="text-right text-xs text-gray-400 font-medium">
-          {title.length}/100
-        </div>
+
+        {/* Selected Photos */}
+        {selectedPhotos.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
+            {selectedPhotos.map((photo, i) => (
+              <div 
+                key={photo.id}
+                className="relative size-20 shrink-0 rounded-xl overflow-hidden border border-black/5 shadow-sm"
+              >
+                <img src={photo.preview} className="w-full h-full object-cover" alt="Selected" />
+                <button 
+                  onClick={() => handleRemovePhoto(i)}
+                  className="absolute top-1 right-1 bg-black/50 text-white rounded-full size-5 flex items-center justify-center hover:bg-red-500 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[12px]">close</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Photo Buttons - só mostra em modo criação */}
+        {!isEditMode && selectedPhotos.length < 5 && (
+          <div className="space-y-2">
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full h-12 rounded-xl border-2 border-dashed border-gray-300 text-gray-500 font-bold hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2"
+            >
+              <span className="material-symbols-outlined">photo_library</span>
+              Adicionar fotos ({selectedPhotos.length}/5)
+            </button>
+            <button 
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.capture = 'environment';
+                input.onchange = (e) => {
+                  const target = e.target as HTMLInputElement;
+                  if (target.files) {
+                    handleFileChange({ target } as React.ChangeEvent<HTMLInputElement>);
+                  }
+                };
+                input.click();
+              }}
+              className="w-full h-12 rounded-xl bg-dark text-white font-bold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+            >
+              <span className="material-symbols-outlined">photo_camera</span>
+              Tirar foto
+            </button>
+          </div>
+        )}
+
+        {/* Aviso em modo edição */}
+        {isEditMode && selectedPhotos.length === 0 && (
+          <p className="text-xs text-gray-400 text-center">
+            As fotos foram removidas. Clique em "X" para remover fotos existentes.
+          </p>
+        )}
       </div>
 
       {/* Description Input */}
@@ -538,9 +552,9 @@ export const NewReview: React.FC = () => {
         </div>
       </div>
 
-      {/* Tag People */}
+      {/* Tag Friends */}
       <div className="space-y-3">
-        <label className="text-sm font-bold ml-1">Marcar pessoas</label>
+        <label className="text-sm font-bold ml-1">Marcar amigos</label>
         
         {taggedUsers.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -570,7 +584,7 @@ export const NewReview: React.FC = () => {
           onClick={() => setShowTagModal(true)}
           className="w-full h-12 rounded-xl border-2 border-dashed border-gray-300 text-gray-500 font-bold hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2"
         >
-          <span className="material-symbols-outlined">add</span> Adicionar
+          <span className="material-symbols-outlined">person_add</span> Adicionar amigos
         </button>
       </div>
 
@@ -581,7 +595,7 @@ export const NewReview: React.FC = () => {
           <div className="relative bg-white rounded-3xl w-full max-w-sm h-[70vh] shadow-2xl overflow-hidden flex flex-col animate-bounce-in">
             
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-bold text-lg">Marcar pessoas</h3>
+              <h3 className="font-bold text-lg">Marcar amigos</h3>
               <button onClick={() => setShowTagModal(false)}>
                 <span className="material-symbols-outlined text-gray-500">close</span>
               </button>
@@ -602,15 +616,18 @@ export const NewReview: React.FC = () => {
 
             <div className="flex-1 overflow-y-auto p-4 space-y-1">
               <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
-                Pessoas que você segue
+                Seus amigos
+              </p>
+              <p className="text-[10px] text-gray-400 mb-3">
+                Pessoas que você segue e te seguem de volta
               </p>
               
-              {loadingFollowing ? (
+              {loadingFriends ? (
                 <div className="flex justify-center py-10">
                   <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
                 </div>
-              ) : filteredUsersToTag.length > 0 ? (
-                filteredUsersToTag.map(u => {
+              ) : filteredFriendsToTag.length > 0 ? (
+                filteredFriendsToTag.map(u => {
                   const isTagged = !!taggedUsers.find(tagged => tagged.id === u.id);
                   return (
                     <button 
@@ -643,7 +660,8 @@ export const NewReview: React.FC = () => {
               ) : (
                 <div className="text-center py-10 text-gray-400">
                   <span className="material-symbols-outlined text-3xl mb-2 opacity-50">group_off</span>
-                  <p className="text-sm">Você ainda não segue ninguém</p>
+                  <p className="text-sm">Você ainda não tem amigos</p>
+                  <p className="text-xs mt-1">Siga pessoas e aguarde elas te seguirem de volta</p>
                 </div>
               )}
             </div>
@@ -662,12 +680,14 @@ export const NewReview: React.FC = () => {
     </div>
   );
 
-  const renderStep3 = () => {
+  // --- RENDER STEP 2 ---
+
+  const renderStep2 = () => {
     const activeCriteria = getCriteria();
     const average = calculateAverage();
 
     return (
-      <div className="p-6 space-y-8">
+      <div className="p-6 space-y-8 touch-pan-y">
         {/* Type Toggle */}
         <div className="space-y-3">
           <label className="text-sm font-bold ml-1 text-secondary uppercase tracking-wider">
@@ -695,7 +715,7 @@ export const NewReview: React.FC = () => {
 
         <div className="h-px bg-black/5"></div>
 
-        {/* Sliders */}
+        {/* Sliders - com touch-action para evitar tremor */}
         <div className="space-y-8">
           {activeCriteria.map(({ key, label }) => {
             const val = scores[key as keyof typeof scores];
@@ -703,17 +723,20 @@ export const NewReview: React.FC = () => {
               <div key={key} className="space-y-2">
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-sm font-bold text-gray-600">{label}</label>
-                  <span className="font-bold text-primary text-lg">{val.toFixed(1)}</span>
+                  <span className="font-bold text-primary text-lg tabular-nums w-12 text-right">{val.toFixed(1)}</span>
                 </div>
-                <input 
-                  type="range"
-                  min="0"
-                  max="10"
-                  step="0.5"
-                  value={val}
-                  onChange={(e) => handleScoreChange(key, parseFloat(e.target.value))}
-                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
-                />
+                <div className="touch-none">
+                  <input 
+                    type="range"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    value={val}
+                    onChange={(e) => handleScoreChange(key, parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+                    style={{ touchAction: 'none' }}
+                  />
+                </div>
               </div>
             );
           })}
@@ -726,7 +749,7 @@ export const NewReview: React.FC = () => {
           <span className="text-lg font-bold text-dark">Média:</span>
           <div className="flex items-center gap-2 bg-yellow-400/10 px-3 py-1.5 rounded-lg border border-yellow-400/20">
             <span className="material-symbols-outlined filled text-yellow-400 text-[22px]">star</span>
-            <span className="text-xl font-black text-yellow-500">{average}</span>
+            <span className="text-xl font-black text-yellow-500 tabular-nums">{average}</span>
           </div>
         </div>
 
@@ -740,10 +763,10 @@ export const NewReview: React.FC = () => {
             {posting ? (
               <>
                 <span className="material-symbols-outlined animate-spin">progress_activity</span>
-                PUBLICANDO...
+                {isEditMode ? 'ATUALIZANDO...' : 'PUBLICANDO...'}
               </>
             ) : (
-              'POSTAR REVIEW'
+              isEditMode ? 'ATUALIZAR REVIEW' : 'POSTAR REVIEW'
             )}
           </button>
         </div>
@@ -751,10 +774,12 @@ export const NewReview: React.FC = () => {
     );
   };
 
-  const canProceedStep2 = selectedRestaurant && title.length > 0 && title.length <= 100 && description.length > 0 && description.length <= 700;
+  const canProceedStep1 = () => {
+    return selectedRestaurant && description.trim().length > 0;
+  };
 
   return (
-    <div className="min-h-screen bg-cream flex flex-col relative">
+    <div className="min-h-screen bg-cream flex flex-col relative overflow-x-hidden">
       
       {/* --- TOAST --- */}
       {toastMessage && (
@@ -772,7 +797,7 @@ export const NewReview: React.FC = () => {
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDiscardModal(false)} />
           <div className="bg-white rounded-2xl p-6 w-full max-w-xs shadow-2xl relative z-10 animate-bounce-in text-center">
             <h3 className="font-bold text-lg mb-2">Deseja descartar?</h3>
-            <p className="text-secondary text-sm mb-6">Suas fotos selecionadas serão perdidas.</p>
+            <p className="text-secondary text-sm mb-6">Suas informações serão perdidas.</p>
             <div className="flex gap-3">
               <button 
                 onClick={() => setShowDiscardModal(false)}
@@ -796,14 +821,14 @@ export const NewReview: React.FC = () => {
         <button onClick={handleBack} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <span className="font-bold text-lg">Nova Review</span>
+        <span className="font-bold text-lg">{isEditMode ? 'Editar Review' : 'Nova Review'}</span>
         
-        {step < 3 ? (
+        {step === 1 ? (
           <button 
             onClick={handleNext}
-            disabled={step === 1 ? selectedPhotos.length === 0 : !canProceedStep2}
+            disabled={!canProceedStep1()}
             className={`font-bold text-sm px-3 py-1.5 rounded-full transition-colors ${
-              (step === 1 && selectedPhotos.length > 0) || (step === 2 && canProceedStep2) 
+              canProceedStep1() 
                 ? 'text-primary bg-primary/10' 
                 : 'text-gray-300'
             }`}
@@ -815,17 +840,15 @@ export const NewReview: React.FC = () => {
         )}
       </header>
       
-      <main className="flex-1 overflow-y-auto no-scrollbar pb-10">
+      <main className="flex-1 overflow-y-auto no-scrollbar pb-10 overflow-x-hidden">
         {/* Step Progress */}
         <div className="px-6 pt-4 flex gap-2">
           <div className={`h-1 flex-1 rounded-full ${step >= 1 ? 'bg-primary' : 'bg-gray-200'}`} />
           <div className={`h-1 flex-1 rounded-full ${step >= 2 ? 'bg-primary' : 'bg-gray-200'}`} />
-          <div className={`h-1 flex-1 rounded-full ${step >= 3 ? 'bg-primary' : 'bg-gray-200'}`} />
         </div>
         
         {step === 1 && renderStep1()}
         {step === 2 && renderStep2()}
-        {step === 3 && renderStep3()}
       </main>
 
     </div>
