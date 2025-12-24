@@ -58,12 +58,10 @@ const BLOCKED_NAME_PATTERNS = /hotel|pousada|resort|bangalô|hostel|motel|faculd
 
 // Função para verificar se deve bloquear o lugar
 function shouldBlockPlace(name: string, types: string[]): boolean {
-  // 1. Bloquear por padrão de nome
   if (BLOCKED_NAME_PATTERNS.test(name)) {
     return true;
   }
   
-  // 2. Verificar tipos do Google
   const hasFoodType = types.some(t => 
     t.includes('restaurant') || 
     t === 'cafe' || 
@@ -76,17 +74,14 @@ function shouldBlockPlace(name: string, types: string[]): boolean {
   
   const hasBlockedType = types.some(t => BLOCKED_GOOGLE_TYPES.includes(t));
   
-  // 3. Se é "lodging" (hotel/pousada), SEMPRE bloqueia
   if (types.includes('lodging')) {
     return true;
   }
   
-  // 4. Se tem tipo bloqueado e NÃO é primariamente comida, bloqueia
   if (hasBlockedType && !hasFoodType) {
     return true;
   }
   
-  // 5. Se não tem NENHUM tipo de comida, bloqueia
   if (!hasFoodType && types.length > 0) {
     return true;
   }
@@ -101,12 +96,13 @@ async function searchNearby(lat: number, lng: number, type: string): Promise<any
   return response.json();
 }
 
-// Buscar detalhes completos
+// Buscar detalhes completos - ATUALIZADO com horários
 async function getPlaceDetails(placeId: string): Promise<any> {
   const fields = [
     "place_id", "name", "formatted_address", "formatted_phone_number",
     "website", "url", "rating", "user_ratings_total", "price_level",
-    "photos", "geometry", "types", "address_components"
+    "photos", "geometry", "types", "address_components",
+    "opening_hours", "current_opening_hours" // NOVO: horários
   ].join(",");
 
   const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=${fields}&language=pt-BR&key=${GOOGLE_API_KEY}`;
@@ -161,11 +157,10 @@ function mapCuisineTypes(types: string[]): string[] {
     .slice(0, 3);
 }
 
-// BULK SEED OTIMIZADO - Só insere restaurantes NOVOS e VÁLIDOS
+// BULK SEED OTIMIZADO
 async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: number; blocked: number; errors: string[] }> {
   const results = { inserted: 0, skipped: 0, blocked: 0, errors: [] as string[] };
 
-  // 1. BUSCAR TODOS OS google_place_id JÁ EXISTENTES (1 query só)
   const { data: existingPlaces } = await supabase
     .from("restaurants")
     .select("google_place_id");
@@ -188,25 +183,20 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
         if (nearbyData.status !== "OK") continue;
 
         for (const place of nearbyData.results || []) {
-          // Filtros: rating >= 4.0 e reviews >= 10
           if ((place.rating || 0) < 4.0) continue;
           if ((place.user_ratings_total || 0) < 10) continue;
           
-          // Já processado nesta execução?
           if (processedIds.has(place.place_id)) continue;
           processedIds.add(place.place_id);
 
-          // JÁ EXISTE NO BANCO? (verificação local, SEM query extra)
           if (existingIds.has(place.place_id)) {
             results.skipped++;
             continue;
           }
 
-          // Buscar detalhes (só para restaurantes NOVOS)
           const details = await getPlaceDetails(place.place_id);
           if (!details) continue;
 
-          // VERIFICAR SE DEVE BLOQUEAR
           if (shouldBlockPlace(details.name, details.types || [])) {
             console.log(`🚫 BLOQUEADO: ${details.name} (types: ${details.types?.slice(0, 5).join(', ')})`);
             results.blocked++;
@@ -216,7 +206,10 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
           const { city: extractedCity, neighborhood } = extractLocation(details.address_components);
           const cuisineTypes = mapCuisineTypes(details.types || []);
 
-          // Inserir no banco
+          // Extrair horários
+          const openingHours = details.opening_hours?.weekday_text || null;
+          const isOpenNow = details.current_opening_hours?.open_now ?? details.opening_hours?.open_now ?? null;
+
           const { error } = await supabase.from("restaurants").insert({
             google_place_id: details.place_id,
             name: details.name,
@@ -233,6 +226,8 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
               : null,
             cuisine_types: cuisineTypes.length > 0 ? cuisineTypes : ["Restaurante"],
             price_level: details.price_level || null,
+            opening_hours: openingHours,
+            is_open_now: isOpenNow,
             is_active: true
           });
 
@@ -244,7 +239,6 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
             console.log(`✅ NOVO: ${details.name} (${extractedCity})`);
           }
 
-          // Rate limiting
           await new Promise(r => setTimeout(r, 100));
         }
 
@@ -312,6 +306,10 @@ serve(async (req: Request) => {
         if (!place_id) throw new Error("place_id is required");
         const details = await getPlaceDetails(place_id);
         if (details) {
+          // Extrair horários formatados
+          const openingHours = details.opening_hours?.weekday_text || null;
+          const isOpenNow = details.current_opening_hours?.open_now ?? details.opening_hours?.open_now ?? null;
+
           result = {
             place_id: details.place_id,
             name: details.name,
@@ -324,6 +322,8 @@ serve(async (req: Request) => {
             price_level: details.price_level,
             location: details.geometry?.location,
             types: details.types,
+            opening_hours: openingHours,
+            is_open_now: isOpenNow,
             photos: details.photos?.slice(0, 5).map((p: any) => ({
               url: getPhotoUrl(p.photo_reference),
             })),

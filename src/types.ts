@@ -37,14 +37,18 @@ export interface Restaurant {
   cuisine_types?: string[]; // JSONB
   occasions?: string[]; // JSONB
   price_level?: number;
-  rating?: number; // Calculated usually, mapping from average_score if available
-  reviews_count?: number; // Calculated
+  rating?: number;
+  reviews_count?: number;
+  review_count?: number;
+  google_place_id?: string;
+  opening_hours?: string[] | { weekday_text?: string[] };  // NOVO
+  is_open_now?: boolean;  // NOVO
 
   // UI Helpers (Optional)
-  type?: string; // Helper for main cuisine category display
-  description?: string; // For AI results or short bios
-  distance?: string; // For UI display of distance
-  coords?: { x: number; y: number }; // For abstract map placement
+  type?: string;
+  description?: string;
+  distance?: string;
+  coords?: { x: number; y: number };
 }
 
 // Matches 'reviews' table
