@@ -4,5 +4,8 @@
       "path": "/api/seed-restaurants",
       "schedule": "0 3 * * 0"
     }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/" }
   ]
 }
