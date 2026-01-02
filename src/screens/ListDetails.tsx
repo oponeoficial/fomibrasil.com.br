@@ -1,18 +1,21 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Restaurant } from '../types';
+import { Restaurant, List, User } from '../types';
 import { useAppContext } from '../AppContext';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
-import { DEFAULT_RESTAURANT } from '../constants';
+import { DEFAULT_RESTAURANT, DEFAULT_AVATAR } from '../constants';
 
 export const ListDetails: React.FC = () => {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { lists, addRestaurantToList, removeRestaurantFromList, searchRestaurants, getRestaurantsByIds } = useAppContext();
-  
-  // Find current list from context
-  const list = lists.find(l => l.id === id);
-  
+  const { lists, addRestaurantToList, removeRestaurantFromList, searchRestaurants, getRestaurantsByIds, supabase, currentUser } = useAppContext();
+
+  // State for list (can be own list or from another user)
+  const [list, setList] = useState<List | null>(null);
+  const [listOwner, setListOwner] = useState<User | null>(null);
+  const [loadingList, setLoadingList] = useState(true);
+  const [isOwnList, setIsOwnList] = useState(false);
+
   // State
   const [items, setItems] = useState<Restaurant[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
@@ -22,6 +25,74 @@ export const ListDetails: React.FC = () => {
   const [searching, setSearching] = useState(false);
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Fetch list - first check own lists, then fetch from DB
+  useEffect(() => {
+    const fetchList = async () => {
+      if (!id) {
+        setLoadingList(false);
+        return;
+      }
+
+      // First, check if it's in user's own lists
+      const ownList = lists.find(l => l.id === id);
+      if (ownList) {
+        setList(ownList);
+        setIsOwnList(true);
+        setListOwner(currentUser);
+        setLoadingList(false);
+        return;
+      }
+
+      // If not found, fetch from database (another user's list)
+      try {
+        const { data: listData, error } = await supabase
+          .from('lists')
+          .select(`
+            *,
+            owner:profiles!user_id(id, username, full_name, profile_photo_url)
+          `)
+          .eq('id', id)
+          .single();
+
+        if (error || !listData) {
+          setList(null);
+          setLoadingList(false);
+          return;
+        }
+
+        // Check if list is private and user is not the owner
+        if (listData.is_private && listData.user_id !== currentUser?.id) {
+          setList(null);
+          setLoadingList(false);
+          return;
+        }
+
+        // Get restaurant IDs from list_restaurants
+        const { data: listRestaurants } = await supabase
+          .from('list_restaurants')
+          .select('restaurant_id')
+          .eq('list_id', id);
+
+        const restaurantIds = listRestaurants?.map(lr => lr.restaurant_id) || [];
+
+        setList({
+          ...listData,
+          items: restaurantIds,
+          count: restaurantIds.length
+        });
+        setListOwner(listData.owner);
+        setIsOwnList(listData.user_id === currentUser?.id);
+      } catch (err) {
+        console.error('Error fetching list:', err);
+        setList(null);
+      } finally {
+        setLoadingList(false);
+      }
+    };
+
+    fetchList();
+  }, [id, lists, currentUser?.id, supabase]);
 
   // Fetch restaurants when list changes
   useEffect(() => {
@@ -38,8 +109,10 @@ export const ListDetails: React.FC = () => {
       setLoadingItems(false);
     };
 
-    fetchItems();
-  }, [list?.items, getRestaurantsByIds]);
+    if (!loadingList) {
+      fetchItems();
+    }
+  }, [list?.items, getRestaurantsByIds, loadingList]);
 
   // Search restaurants with debounce
   useEffect(() => {
@@ -63,16 +136,40 @@ export const ListDetails: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const handleShare = async () => {
+    const shareUrl = `${window.location.origin}/lists/${id}`;
+    const shareText = `Confira a lista "${list?.name}" no Fomí!`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: list?.name, text: shareText, url: shareUrl });
+      } catch {}
+    } else {
+      await navigator.clipboard.writeText(shareUrl);
+      showToast("Link copiado!");
+    }
+  };
+
+  // Loading state
+  if (loadingList) {
+    return (
+      <div className="min-h-screen bg-cream flex flex-col items-center justify-center">
+        <span className="material-symbols-outlined animate-spin text-primary text-4xl">progress_activity</span>
+      </div>
+    );
+  }
+
   if (!list) {
     return (
       <div className="min-h-screen bg-cream flex flex-col items-center justify-center p-10 text-center">
         <span className="material-symbols-outlined text-4xl text-gray-400 mb-4">error</span>
         <p className="font-bold text-dark mb-2">Lista não encontrada</p>
-        <button 
-          onClick={() => navigate('/lists')}
+        <p className="text-sm text-gray-500 mb-4">Esta lista pode ser privada ou não existir.</p>
+        <button
+          onClick={() => navigate(-1)}
           className="mt-4 px-6 py-2 bg-primary text-white rounded-full font-bold"
         >
-          Voltar para listas
+          Voltar
         </button>
       </div>
     );
@@ -123,11 +220,11 @@ export const ListDetails: React.FC = () => {
 
       {/* --- HEADER --- */}
       <div className="sticky top-0 z-40 bg-cream/95 backdrop-blur-sm p-4 border-b border-black/5 flex justify-between items-center">
-        <button onClick={() => navigate('/lists')} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
+        <button onClick={() => navigate(-1)} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
           <span className="material-symbols-outlined text-[24px]">arrow_back</span>
         </button>
-        <div className="text-center">
-          <h1 className="text-lg font-bold tracking-wide">{list.name}</h1>
+        <div className="text-center flex-1 mx-2">
+          <h1 className="text-lg font-bold tracking-wide truncate">{list.name}</h1>
           {list.is_private && (
             <span className="text-[10px] text-gray-500 flex items-center justify-center gap-1">
               <span className="material-symbols-outlined text-[12px]">lock</span>
@@ -135,10 +232,37 @@ export const ListDetails: React.FC = () => {
             </span>
           )}
         </div>
-        <button onClick={() => setShowAddModal(true)} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
-          <span className="material-symbols-outlined text-[28px]">add</span>
-        </button>
+        <div className="flex items-center gap-1">
+          <button onClick={handleShare} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
+            <span className="material-symbols-outlined text-[22px]">share</span>
+          </button>
+          {isOwnList && (
+            <button onClick={() => setShowAddModal(true)} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
+              <span className="material-symbols-outlined text-[28px]">add</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Owner info (if not own list) */}
+      {!isOwnList && listOwner && (
+        <div
+          onClick={() => navigate(`/profile/${listOwner.username}`)}
+          className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors"
+        >
+          <img
+            src={listOwner.profile_photo_url || DEFAULT_AVATAR}
+            alt={listOwner.full_name}
+            className="size-10 rounded-full object-cover"
+            onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR; }}
+          />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-dark">{listOwner.full_name}</p>
+            <p className="text-xs text-gray-500">@{listOwner.username}</p>
+          </div>
+          <span className="material-symbols-outlined text-gray-400">chevron_right</span>
+        </div>
+      )}
 
       {/* --- CONTENT --- */}
       <div className="p-4 space-y-2">
@@ -158,31 +282,35 @@ export const ListDetails: React.FC = () => {
           <div className="flex flex-col items-center justify-center py-20 text-gray-400">
             <span className="material-symbols-outlined text-4xl mb-2 opacity-50">bookmark_border</span>
             <p className="font-bold text-dark">Lista vazia.</p>
-            <p className="text-sm mt-1">Adicione restaurantes a esta lista</p>
-            <button 
-              onClick={() => setShowAddModal(true)} 
-              className="mt-6 bg-primary text-white px-6 py-2 rounded-full font-bold text-sm hover:bg-primary/90 transition-colors"
-            >
-              Adicionar restaurante
-            </button>
+            <p className="text-sm mt-1">
+              {isOwnList ? 'Adicione restaurantes a esta lista' : 'Nenhum restaurante nesta lista ainda'}
+            </p>
+            {isOwnList && (
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="mt-6 bg-primary text-white px-6 py-2 rounded-full font-bold text-sm hover:bg-primary/90 transition-colors"
+              >
+                Adicionar restaurante
+              </button>
+            )}
           </div>
         ) : (
           // Restaurant List
           items.map(item => (
-            <div 
-              key={item.id} 
-              className="relative w-full h-24 overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-xl"
+            <div
+              key={item.id}
+              className={`relative w-full h-24 rounded-xl ${isOwnList ? 'overflow-x-auto snap-x snap-mandatory no-scrollbar' : ''}`}
             >
-              <div className="w-[calc(100%+80px)] h-full flex">
-                {/* CARD CONTENT (Snap Center) */}
-                <div className="w-[100vw] sm:w-full snap-center shrink-0 pr-8 sm:pr-0">
-                  <div 
+              <div className={`h-full flex ${isOwnList ? 'w-[calc(100%+80px)]' : 'w-full'}`}>
+                {/* CARD CONTENT */}
+                <div className={`snap-center shrink-0 ${isOwnList ? 'w-[100vw] sm:w-full pr-8 sm:pr-0' : 'w-full'}`}>
+                  <div
                     onClick={() => setSelectedRestaurant(item)}
-                    className="w-[calc(100vw-32px)] sm:w-full h-full bg-white border border-gray-100 rounded-xl flex overflow-hidden active:bg-gray-50 transition-colors cursor-pointer shadow-sm"
+                    className={`h-full bg-white border border-gray-100 rounded-xl flex overflow-hidden active:bg-gray-50 transition-colors cursor-pointer shadow-sm ${isOwnList ? 'w-[calc(100vw-32px)] sm:w-full' : 'w-full'}`}
                   >
-                    <img 
-                      src={item.photo_url || DEFAULT_RESTAURANT} 
-                      className="w-24 h-full object-cover" 
+                    <img
+                      src={item.photo_url || DEFAULT_RESTAURANT}
+                      className="w-24 h-full object-cover"
                       alt={item.name}
                       onError={(e) => {
                         (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT;
@@ -207,21 +335,23 @@ export const ListDetails: React.FC = () => {
                   </div>
                 </div>
 
-                {/* DELETE BUTTON (Snap Center) */}
-                <div className="w-[80px] snap-center shrink-0 h-full flex items-center justify-center">
-                  <button 
-                    onClick={() => handleRemoveItem(item.id)}
-                    className="size-14 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center border border-red-500/50 active:scale-90 transition-transform"
-                  >
-                    <span className="material-symbols-outlined">delete</span>
-                  </button>
-                </div>
+                {/* DELETE BUTTON (only for own list) */}
+                {isOwnList && (
+                  <div className="w-[80px] snap-center shrink-0 h-full flex items-center justify-center">
+                    <button
+                      onClick={() => handleRemoveItem(item.id)}
+                      className="size-14 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center border border-red-500/50 active:scale-90 transition-transform"
+                    >
+                      <span className="material-symbols-outlined">delete</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))
         )}
         
-        {items.length > 0 && (
+        {items.length > 0 && isOwnList && (
           <div className="h-20 flex items-center justify-center text-xs text-gray-400 font-medium">
             <span className="material-symbols-outlined text-lg mr-2 opacity-50">swipe_left</span>
             Arraste para remover
@@ -229,8 +359,8 @@ export const ListDetails: React.FC = () => {
         )}
       </div>
 
-      {/* --- ADD RESTAURANT MODAL --- */}
-      {showAddModal && (
+      {/* --- ADD RESTAURANT MODAL (only for own list) --- */}
+      {showAddModal && isOwnList && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowAddModal(false)} />
           <div className="relative bg-white border border-gray-100 rounded-3xl w-full max-w-md h-[80vh] shadow-2xl flex flex-col overflow-hidden animate-bounce-in">

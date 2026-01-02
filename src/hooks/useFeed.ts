@@ -20,22 +20,15 @@ export const useFeed = (): UseFeedReturn => {
 
   const refreshFeed = useCallback(async (userId: string) => {
     try {
-      const { data: reviewsData, error } = await FeedService.getReviews(supabase);
-      if (error) return;
+      // Use optimized feed loading - single parallel request
+      const { data: mappedReviews, error } = await FeedService.getOptimizedFeed(supabase, userId);
 
-      if (reviewsData) {
-        const { data: userLikes } = await FeedService.getUserLikes(supabase, userId);
-        const likedReviewIds = new Set(userLikes?.map(l => l.review_id) || []);
+      if (error) {
+        console.error('Erro no refreshFeed:', error);
+        return;
+      }
 
-        const { data: savedData } = await FeedService.getUserSavedRestaurants(supabase, userId);
-        const savedRestaurantIds = new Set(savedData?.map(s => s.restaurant_id) || []);
-
-        const mappedReviews = reviewsData.map(review => ({
-          ...review,
-          is_liked: likedReviewIds.has(review.id),
-          is_saved: savedRestaurantIds.has(review.restaurant_id)
-        }));
-
+      if (mappedReviews) {
         setReviews(mappedReviews as Review[]);
       }
     } catch (e) {
@@ -97,7 +90,10 @@ export const useFeed = (): UseFeedReturn => {
       title: data.title,
       description: data.description,
       reviewType: data.reviewType,
-      scores: data.scores
+      scores: data.scores,
+      voltaria: data.voltaria,
+      occasions: data.occasions,
+      averageScore: data.averageScore
     });
 
     if (error || !newReview) {

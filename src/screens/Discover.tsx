@@ -21,6 +21,7 @@ export const Discover: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [showMap, setShowMap] = useState(true);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
   const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export const Discover: React.FC = () => {
   
   // Profile search
   const [profiles, setProfiles] = useState<User[]>([]);
+  const [suggestedProfiles, setSuggestedProfiles] = useState<User[]>([]);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   
   // Restaurant search hook
@@ -78,13 +80,38 @@ export const Discover: React.FC = () => {
     }
   }, [loadMore, loadingRestaurants, hasMore]);
 
+  // Load suggested profiles on mount
+  useEffect(() => {
+    const loadSuggestedProfiles = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, profile_photo_url, is_verified, email')
+        .eq('is_verified', true)
+        .limit(10);
+
+      if (data && data.length > 0) {
+        setSuggestedProfiles(data);
+      } else {
+        // Se não há verificados, pega os mais recentes
+        const { data: recentData } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, profile_photo_url, is_verified, email')
+          .order('created_at', { ascending: false })
+          .limit(10);
+        setSuggestedProfiles(recentData || []);
+      }
+    };
+
+    loadSuggestedProfiles();
+  }, [supabase]);
+
   // Profile search
   useEffect(() => {
     if (activeTab !== 'profiles' || searchQuery.length < 2) {
       setProfiles([]);
       return;
     }
-    
+
     const timer = setTimeout(async () => {
       setLoadingProfiles(true);
       const { data } = await supabase
@@ -95,7 +122,7 @@ export const Discover: React.FC = () => {
       setProfiles(data || []);
       setLoadingProfiles(false);
     }, 300);
-    
+
     return () => clearTimeout(timer);
   }, [searchQuery, activeTab, supabase]);
 
@@ -108,11 +135,21 @@ export const Discover: React.FC = () => {
   const hasActiveFilters = filters.cuisine || filters.priceLevel > 0 || filters.minRating > 0;
 
   const openDirections = (restaurant: any) => {
-    if (!restaurant.latitude || !restaurant.longitude) return;
-    const dest = `${restaurant.latitude},${restaurant.longitude}`;
-    const url = userLocation 
-      ? `https://www.google.com/maps/dir/${userLocation.lat},${userLocation.lng}/${dest}`
-      : `https://www.google.com/maps/search/?api=1&query=${dest}`;
+    let url: string;
+
+    if (restaurant.google_maps_url) {
+      url = restaurant.google_maps_url;
+    } else if (restaurant.latitude && restaurant.longitude) {
+      const dest = `${restaurant.latitude},${restaurant.longitude}`;
+      url = userLocation
+        ? `https://www.google.com/maps/dir/${userLocation.lat},${userLocation.lng}/${dest}`
+        : `https://www.google.com/maps/search/?api=1&query=${dest}`;
+    } else {
+      // Fallback: buscar pelo nome e endereço
+      const query = encodeURIComponent(`${restaurant.name} ${restaurant.address || restaurant.neighborhood || 'Recife'}`);
+      url = `https://www.google.com/maps/search/?api=1&query=${query}`;
+    }
+
     window.open(url, '_blank');
   };
 
@@ -249,15 +286,15 @@ export const Discover: React.FC = () => {
                   </div>
                   
                   <div className="flex-1">
-                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nota mínima</label>
+                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nota mínima (0-10)</label>
                     <div className="flex gap-1">
-                      {[3, 4, 4.5].map(rating => (
+                      {[5, 7, 8, 9].map(rating => (
                         <button
                           key={rating}
                           onClick={() => setFilters({ ...filters, minRating: filters.minRating === rating ? 0 : rating })}
                           className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-0.5 ${filters.minRating === rating ? 'bg-primary text-white' : 'bg-white border border-gray-200 text-gray-600'}`}
                         >
-                          {rating}+<span className="material-symbols-outlined text-xs filled">star</span>
+                          {rating}+
                         </button>
                       ))}
                     </div>
@@ -280,29 +317,60 @@ export const Discover: React.FC = () => {
         <div className="flex-1 flex flex-col">
           {/* Map */}
           <div className="relative">
-            <div className={`overflow-hidden transition-all duration-300 ${showMap ? 'h-56' : 'h-0'}`}>
+            <div className={`overflow-hidden transition-all duration-300 ${showMap ? 'h-64' : 'h-0'}`}>
               <RestaurantMap
                 restaurants={restaurants}
                 userLocation={userLocation}
                 hoveredId={hoveredId}
-                onRestaurantClick={setSelectedRestaurant}
+                onRestaurantClick={(r) => {
+                  if (mapFullscreen) setMapFullscreen(false);
+                  setSelectedRestaurant(r);
+                }}
                 height="100%"
+                isFullscreen={mapFullscreen}
+                onToggleFullscreen={() => setMapFullscreen(!mapFullscreen)}
               />
-              
-              <div className="absolute bottom-2 left-2 bg-white/95 backdrop-blur px-3 py-1.5 rounded-full shadow-lg text-sm z-[400]">
-                <span className="font-bold text-dark">{restaurants.length}</span>
-                <span className="text-gray-500 ml-1">restaurantes</span>
-              </div>
             </div>
-            
-            <button
-              onClick={() => setShowMap(!showMap)}
-              className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-white rounded-full px-4 py-1.5 shadow-lg border border-gray-200 text-sm font-medium flex items-center gap-1 z-[500]"
-            >
-              <span className="material-symbols-outlined text-base">{showMap ? 'expand_less' : 'map'}</span>
-              {showMap ? 'Ocultar mapa' : 'Ver mapa'}
-            </button>
+
+            {/* Map toggle button */}
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                onClick={() => setShowMap(!showMap)}
+                className="bg-white rounded-full px-4 py-2 shadow-md border border-gray-200 text-sm font-medium flex items-center gap-1.5 hover:shadow-lg transition-all"
+              >
+                <span className="material-symbols-outlined text-base">{showMap ? 'expand_less' : 'map'}</span>
+                {showMap ? 'Ocultar mapa' : 'Ver mapa'}
+              </button>
+
+              {showMap && (
+                <button
+                  onClick={() => setMapFullscreen(true)}
+                  className="bg-primary text-white rounded-full px-4 py-2 shadow-md text-sm font-bold flex items-center gap-1.5 hover:bg-primary/90 transition-all"
+                >
+                  <span className="material-symbols-outlined text-base">fullscreen</span>
+                  Expandir
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Fullscreen map */}
+          {mapFullscreen && (
+            <div className="fixed inset-0 z-[35]">
+              <RestaurantMap
+                restaurants={restaurants}
+                userLocation={userLocation}
+                hoveredId={hoveredId}
+                onRestaurantClick={(r) => {
+                  setMapFullscreen(false);
+                  setSelectedRestaurant(r);
+                }}
+                height="100vh"
+                isFullscreen={true}
+                onToggleFullscreen={() => setMapFullscreen(false)}
+              />
+            </div>
+          )}
 
           {/* Restaurant List */}
           <div 
@@ -416,17 +484,17 @@ export const Discover: React.FC = () => {
         </div>
       ) : (
         /* Profiles Tab */
-        <div className="flex-1 px-4 py-4">
+        <div className="flex-1 px-4 py-4 overflow-y-auto">
           {loadingProfiles ? (
             <div className="flex justify-center py-10">
               <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             </div>
-          ) : profiles.length === 0 ? (
+          ) : searchQuery.length >= 2 && profiles.length === 0 ? (
             <div className="text-center py-16 text-gray-400">
               <span className="material-symbols-outlined text-5xl mb-3 opacity-30">person_search</span>
-              <p className="font-medium">{searchQuery.length < 2 ? 'Digite pelo menos 2 caracteres' : 'Nenhum perfil encontrado'}</p>
+              <p className="font-medium">Nenhum perfil encontrado</p>
             </div>
-          ) : (
+          ) : searchQuery.length >= 2 ? (
             <div className="space-y-2">
               {profiles.map(user => (
                 <button
@@ -445,6 +513,36 @@ export const Discover: React.FC = () => {
                   <span className="material-symbols-outlined text-gray-300">chevron_right</span>
                 </button>
               ))}
+            </div>
+          ) : (
+            /* Suggested profiles when no search */
+            <div>
+              <h2 className="text-sm font-bold text-gray-500 uppercase mb-3">Sugestões para você</h2>
+              {suggestedProfiles.length === 0 ? (
+                <div className="flex justify-center py-10">
+                  <div className="size-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {suggestedProfiles.map(user => (
+                    <button
+                      key={user.id}
+                      onClick={() => navigate(`/profile/${user.username}`)}
+                      className="w-full flex items-center gap-3 p-3 bg-white rounded-2xl shadow-sm border border-gray-100 hover:border-primary/30 active:scale-[0.98]"
+                    >
+                      <img src={user.profile_photo_url || DEFAULT_AVATAR} alt={user.full_name} className="size-12 rounded-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_AVATAR; }} />
+                      <div className="flex-1 text-left min-w-0">
+                        <div className="flex items-center gap-1">
+                          <h3 className="font-bold text-dark truncate">{user.full_name}</h3>
+                          {user.is_verified && <img src="/selo-verificado.png" alt="Verificado" className="size-4" />}
+                        </div>
+                        <p className="text-sm text-gray-500">@{user.username}</p>
+                      </div>
+                      <span className="material-symbols-outlined text-gray-300">chevron_right</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

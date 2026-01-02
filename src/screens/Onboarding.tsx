@@ -512,7 +512,7 @@ export const Onboarding: React.FC = () => {
     <>
       <div className="mb-6">
         <h1 className="text-3xl font-bold leading-tight mb-2">O que você não curte?</h1>
-        <p className="text-lg text-secondary leading-snug">Vamos evitar recomendar o que não combina com você</p>
+        <p className="text-lg text-secondary leading-snug">Queremos evitar o que não combina com você, não é?</p>
       </div>
       <div className="flex flex-wrap gap-3 pb-32">
         {CUISINE_OPTIONS.map(opt => {
@@ -539,50 +539,43 @@ export const Onboarding: React.FC = () => {
     </>
   );
 
+  // Flatten all occasions from groups into a single array
+  const allOccasions = OCCASION_GROUPS.flatMap(group => group.options);
+
   const renderStep2 = () => (
     <>
       <div className="mb-6">
-        <h1 className="text-3xl font-bold leading-tight mb-2">Conta pra gente quando você sai para comer</h1>
+        <h1 className="text-3xl font-bold leading-tight mb-2">Conta pra gente em que momentos você sai pra comer?</h1>
         <p className="text-lg text-secondary leading-snug">Escolha de 2 a 5 ocasiões que mais combinam com você</p>
       </div>
-      
+
       {occasionError && (
         <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-full shadow-lg z-50 text-sm font-bold animate-bounce-in">
           {occasionError}
         </div>
       )}
 
-      <div className="space-y-8 pb-32">
-        {OCCASION_GROUPS.map((group) => (
-          <section key={group.title}>
-            <h2 className="text-base font-bold text-gray-400 uppercase tracking-wide mb-3 ml-1 flex items-center gap-2">
-              <span className="material-symbols-outlined text-[18px]">{group.icon}</span>
-              {group.title}
-            </h2>
-            <div className="flex flex-wrap gap-2.5">
-              {group.options.map(opt => {
-                const isSelected = occasions.includes(opt.label);
-                return (
-                  <button
-                    key={opt.label}
-                    onClick={() => toggleOccasion(opt.label)}
-                    className={`flex items-center gap-2 rounded-full px-4 py-2.5 transition-all active:scale-95 text-sm font-medium border ${
-                      isSelected
-                        ? 'bg-primary border-primary text-white shadow-md'
-                        : 'bg-white border-black/5 text-dark'
-                    }`}
-                  >
-                    <span className={`material-symbols-outlined text-[16px] ${isSelected ? '' : 'text-primary'}`}>
-                      {opt.icon}
-                    </span>
-                    {opt.label}
-                    {isSelected && <span className="material-symbols-outlined text-[14px]">check</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+      <div className="flex flex-wrap gap-2.5 pb-32">
+        {allOccasions.map(opt => {
+          const isSelected = occasions.includes(opt.label);
+          return (
+            <button
+              key={opt.label}
+              onClick={() => toggleOccasion(opt.label)}
+              className={`flex items-center gap-2 rounded-full px-4 py-2.5 transition-all active:scale-95 text-sm font-medium border ${
+                isSelected
+                  ? 'bg-primary border-primary text-white shadow-md'
+                  : 'bg-white border-black/5 text-dark'
+              }`}
+            >
+              <span className={`material-symbols-outlined text-[16px] ${isSelected ? '' : 'text-primary'}`}>
+                {opt.icon}
+              </span>
+              {opt.label}
+              {isSelected && <span className="material-symbols-outlined text-[14px]">check</span>}
+            </button>
+          );
+        })}
       </div>
     </>
   );
@@ -590,14 +583,14 @@ export const Onboarding: React.FC = () => {
   const renderStep3 = () => (
     <>
       <div className="mb-6">
-        <h1 className="text-3xl font-bold leading-tight mb-2">Vamos afinar o radar</h1>
-        <p className="text-lg text-secondary leading-snug">Entenda melhor seu jeito de escolher lugares</p>
+        <h1 className="text-3xl font-bold leading-tight mb-2">Vamos entrar um pouco mais a fundo nos seus costumes!</h1>
+        <p className="text-lg text-secondary leading-snug">Entenda melhor seu jeito de escolher lugares para comer</p>
       </div>
 
       <div className="space-y-8 pb-32">
         <section>
           <h2 className="text-lg font-bold text-dark mb-3 flex items-center gap-2">
-            Frequência
+            Frequência que você come fora de casa?
             <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-md font-normal">1 opção</span>
           </h2>
           <div className="flex flex-col gap-2">
@@ -663,7 +656,7 @@ export const Onboarding: React.FC = () => {
 
         <section>
           <h2 className="text-lg font-bold text-dark mb-3 flex items-center gap-2">
-            Comportamento
+            Qual a sua rotina?
             <span className={`text-xs px-2 py-0.5 rounded-md font-normal transition-colors ${
                radar.behavior.length >= 1 && radar.behavior.length <= 2 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
             }`}>

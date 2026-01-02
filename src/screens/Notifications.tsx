@@ -204,16 +204,33 @@ export const Notifications: React.FC = () => {
             const reviewImage = getReviewImage(notif);
             const isFollowingActor = followingState[notif.actor_id];
 
+            // Handler para navegação ao clicar na notificação
+            const handleNotificationClick = () => {
+              if (notif.type === 'new_follower') {
+                // Vai para o perfil da pessoa
+                if (notif.actor?.username) {
+                  navigate(`/profile/@${notif.actor.username}`);
+                }
+              } else if (notif.review_id) {
+                // Vai para o detalhe da review
+                navigate(`/review/${notif.review_id}`);
+              }
+            };
+
             return (
-              <div 
-                key={notif.id} 
-                className={`flex items-start gap-3 p-4 border-b border-black/5 transition-colors ${
+              <div
+                key={notif.id}
+                onClick={handleNotificationClick}
+                className={`flex items-start gap-3 p-4 border-b border-black/5 transition-colors cursor-pointer ${
                   !notif.is_read ? 'bg-primary/5' : 'hover:bg-black/[0.02]'
                 }`}
               >
                 {/* User Avatar with Icon Badge */}
-                <button 
-                  onClick={() => notif.actor?.username && navigate(`/profile/${notif.actor.username}`)}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (notif.actor?.username) navigate(`/profile/@${notif.actor.username}`);
+                  }}
                   className="relative shrink-0"
                 >
                   <img 
@@ -232,8 +249,11 @@ export const Notifications: React.FC = () => {
                 {/* Content */}
                 <div className="flex-1 text-sm pt-0.5 min-w-0">
                   <p className="text-dark leading-snug">
-                    <button 
-                      onClick={() => notif.actor?.username && navigate(`/profile/${notif.actor.username}`)}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (notif.actor?.username) navigate(`/profile/@${notif.actor.username}`);
+                      }}
                       className="font-bold hover:underline"
                     >
                       {notif.actor?.full_name || 'Usuário'}
@@ -248,17 +268,24 @@ export const Notifications: React.FC = () => {
 
                 {/* Action (Image or Button) */}
                 {reviewImage && (
-                  <img 
-                    src={reviewImage} 
-                    className="size-11 rounded-lg object-cover shrink-0 border border-black/5" 
+                  <img
+                    src={reviewImage}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (notif.review_id) navigate(`/review/${notif.review_id}`);
+                    }}
+                    className="size-11 rounded-lg object-cover shrink-0 border border-black/5 cursor-pointer hover:opacity-80 transition-opacity"
                     alt="Review"
                     onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
                   />
                 )}
-                
+
                 {notif.type === 'new_follower' && notif.actor_id !== currentUser?.id && (
-                  <button 
-                    onClick={() => handleFollowToggle(notif.actor_id)}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFollowToggle(notif.actor_id);
+                    }}
                     className={`px-4 py-1.5 text-xs font-bold rounded-full shadow-sm active:scale-95 transition-all ${
                       isFollowingActor
                         ? 'bg-gray-100 text-dark hover:bg-gray-200'

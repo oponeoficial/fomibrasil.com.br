@@ -243,13 +243,14 @@ export const Login: React.FC = () => {
 
       <main className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full">
         <div className="flex flex-col items-center mb-8">
-          <img 
-            src="/logo-fomi-vermelho.png" 
-            alt="Fomí" 
+          <img
+            src="/logo-fomi-vermelho.png"
+            alt="Fomí"
             className="h-20 mb-4 object-contain"
           />
-          <h1 className="text-3xl font-bold text-dark text-center">Bem-vindo de volta</h1>
-          <p className="text-secondary text-center mt-2">Faça login na comunidade de quem come bem</p>
+          <h1 className="text-2xl font-bold text-dark text-center leading-tight">
+            Bem vindo à comunidade<br />de quem come bem!
+          </h1>
         </div>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-4">
@@ -338,7 +339,13 @@ export const Login: React.FC = () => {
         </button>
 
         <p className="text-center mt-8 text-sm text-secondary">
-          Não tem uma conta? <button onClick={() => navigate('/register')} className="font-bold text-primary hover:underline">Criar conta</button>
+          Ainda não tem uma conta?{' '}
+          <button
+            onClick={() => navigate('/register')}
+            className="font-bold text-primary hover:underline text-base"
+          >
+            Criar conta
+          </button>
         </p>
       </main>
     </div>
@@ -527,8 +534,6 @@ export const Register: React.FC = () => {
   };
 
   const handleGPS = () => {
-    if (formData.location) return;
-
     setIsLocating(true);
     if (errors.location) {
       setErrors(prev => {
@@ -546,16 +551,17 @@ export const Register: React.FC = () => {
 
     const options = {
       enableHighAccuracy: true,
-      timeout: 10000,
+      timeout: 15000,
       maximumAge: 0
     };
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        
+
         try {
-          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`, {
+          // Zoom 18 para máxima precisão (nível de rua)
+          const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`, {
             headers: {
               'User-Agent': 'FomiApp/1.0',
               'Accept-Language': 'pt-BR'
@@ -563,21 +569,36 @@ export const Register: React.FC = () => {
           });
           if (response.ok) {
             const data = await response.json();
-            const city = data.address?.city || data.address?.town || data.address?.village || data.address?.municipality;
-            const state = data.address?.state_district || data.address?.state;
-            
-            let locationText = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-            if (city && state) locationText = `${city}, ${state}`;
-            else if (city) locationText = city;
+            const addr = data.address || {};
+
+            // Montar endereço completo
+            const road = addr.road || addr.street || addr.pedestrian || '';
+            const houseNumber = addr.house_number || '';
+            const neighbourhood = addr.neighbourhood || addr.suburb || addr.district || '';
+            const city = addr.city || addr.town || addr.village || addr.municipality || '';
+            const state = addr.state || '';
+
+            // Construir string de localização
+            const parts: string[] = [];
+            if (road) {
+              parts.push(houseNumber ? `${road}, ${houseNumber}` : road);
+            }
+            if (neighbourhood) parts.push(neighbourhood);
+            if (city) parts.push(city);
+            if (state && state !== city) parts.push(state);
+
+            let locationText = parts.length > 0
+              ? parts.join(' - ')
+              : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 
             setFormData(prev => ({ ...prev, location: locationText }));
           } else {
             throw new Error("Nominatim API error");
           }
         } catch {
-          setFormData(prev => ({ ...prev, location: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}` }));
+          setFormData(prev => ({ ...prev, location: `${latitude.toFixed(6)}, ${longitude.toFixed(6)}` }));
         }
-        
+
         setIsLocating(false);
       },
       (error) => {
@@ -881,33 +902,30 @@ export const Register: React.FC = () => {
           <div className="space-y-1.5">
             <label className="text-sm font-bold ml-1">Localização</label>
             <div className="flex gap-2 mb-2">
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={handleGPS}
-                disabled={isLocating || !!formData.location}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all ${
-                  formData.location 
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-transparent' 
-                    : 'bg-white shadow-sm text-primary hover:bg-gray-50 border border-transparent'
-                }`}
+                disabled={isLocating}
+                className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all bg-white shadow-sm text-primary hover:bg-gray-50 border border-transparent disabled:opacity-50"
               >
                 {isLocating ? (
                   <span className="block size-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                 ) : (
                   <span className="material-symbols-outlined text-[18px]">my_location</span>
                 )}
-                {formData.location ? 'Localização definida' : 'Usar minha localização'}
+                {isLocating ? 'Localizando...' : formData.location ? 'Atualizar localização' : 'Usar minha localização'}
               </button>
             </div>
-            <input 
-              name="location" 
-              value={formData.location} 
+            <input
+              name="location"
+              value={formData.location}
               onChange={handleChange}
-              onBlur={() => handleBlur('location')} 
-              type="text" 
-              placeholder="Digite cidade e bairro..." 
-              className={`w-full h-14 rounded-full border-2 ${errors.location ? 'border-primary' : 'border-transparent'} bg-white px-5 font-medium shadow-sm focus:border-primary focus:ring-0`} 
+              onBlur={() => handleBlur('location')}
+              type="text"
+              placeholder="Ex: Rua das Flores, 123 - Jardins - São Paulo"
+              className={`w-full h-14 rounded-full border-2 ${errors.location ? 'border-primary' : 'border-transparent'} bg-white px-5 font-medium shadow-sm focus:border-primary focus:ring-0`}
             />
+            <p className="text-xs text-gray-400 ml-2">Use o GPS ou digite seu endereço completo</p>
             {errors.location && <p className="text-xs text-primary font-medium ml-2">{errors.location}</p>}
           </div>
 

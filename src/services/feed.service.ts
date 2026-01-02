@@ -8,11 +8,60 @@ export const FeedService = {
       .select(`
         *,
         user:profiles!user_id(id, username, full_name, profile_photo_url, is_verified),
-        restaurant:restaurants!restaurant_id(id, name, neighborhood, photo_url)
+        restaurant:restaurants!restaurant_id(id, name, neighborhood, photo_url, address, rating, cuisine_types),
+        tagged_users:review_tags(
+          user:profiles!tagged_user_id(id, username, full_name, profile_photo_url)
+        )
       `)
       .eq('is_active', true)
       .order('created_at', { ascending: false })
       .limit(limit);
+  },
+
+  // Optimized feed loading - get everything in parallel
+  async getOptimizedFeed(supabase: SupabaseClient, userId: string, limit = 20) {
+    const [reviewsRes, likesRes, savedRes] = await Promise.all([
+      supabase
+        .from('reviews')
+        .select(`
+          *,
+          user:profiles!user_id(id, username, full_name, profile_photo_url, is_verified),
+          restaurant:restaurants!restaurant_id(id, name, neighborhood, photo_url, address, rating, cuisine_types),
+          tagged_users:review_tags(
+            user:profiles!tagged_user_id(id, username, full_name, profile_photo_url)
+          )
+        `)
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(limit),
+      supabase
+        .from('likes')
+        .select('review_id')
+        .eq('user_id', userId),
+      supabase
+        .from('list_restaurants')
+        .select('restaurant_id, list_id, lists!inner(user_id)')
+        .eq('lists.user_id', userId)
+    ]);
+
+    if (reviewsRes.error) return { data: null, error: reviewsRes.error };
+
+    const likedReviewIds = new Set(likesRes.data?.map(l => l.review_id) || []);
+    const savedRestaurantIds = new Set(savedRes.data?.map(s => s.restaurant_id) || []);
+
+    const mappedReviews = reviewsRes.data?.map(review => {
+      // Flatten tagged_users from nested structure
+      const taggedUsers = review.tagged_users?.map((t: any) => t.user).filter(Boolean) || [];
+
+      return {
+        ...review,
+        tagged_users: taggedUsers,
+        is_liked: likedReviewIds.has(review.id),
+        is_saved: savedRestaurantIds.has(review.restaurant_id)
+      };
+    });
+
+    return { data: mappedReviews, error: null };
   },
 
   async getUserLikes(supabase: SupabaseClient, userId: string) {
@@ -69,7 +118,10 @@ export const FeedService = {
     title: string;
     description: string;
     reviewType: string;
-    scores: { score_1: number; score_2: number; score_3: number; score_4: number };
+    scores: { score_1: number; score_2: number; score_3: number; score_4: number; score_5: number };
+    voltaria?: boolean | null;
+    occasions?: string[];
+    averageScore?: number;
   }) {
     return supabase
       .from('reviews')
@@ -83,6 +135,10 @@ export const FeedService = {
         score_2: data.scores.score_2,
         score_3: data.scores.score_3,
         score_4: data.scores.score_4,
+        score_5: data.scores.score_5,
+        voltaria: data.voltaria,
+        occasions: data.occasions || [],
+        average_score: data.averageScore,
         photos: []
       })
       .select()

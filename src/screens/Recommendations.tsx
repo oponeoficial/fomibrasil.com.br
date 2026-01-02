@@ -5,11 +5,19 @@ import { useAppContext } from '../AppContext';
 import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
 import { Restaurant } from '../types';
 import { DEFAULT_RESTAURANT } from '../constants';
+import { RecommendationService } from '../services';
+
+interface ScoredRestaurant extends Restaurant {
+  matchScore: number;
+  matchReasons: string[];
+}
 
 interface RecommendationSection {
+  id: string;
   title: string;
   subtitle: string;
-  items: Restaurant[];
+  items: ScoredRestaurant[];
+  priority: number;
 }
 
 export const Recommendations: React.FC = () => {
@@ -28,118 +36,15 @@ export const Recommendations: React.FC = () => {
   }, [currentUser]);
 
   const fetchRecommendations = async () => {
+    if (!currentUser) return;
+
     setLoading(true);
     try {
-      const recommendationSections: RecommendationSection[] = [];
-
-      // 1. Top Rated - Melhores avaliados
-      const { data: topRated } = await supabase
-        .from('restaurants')
-        .select('*')
-        .eq('is_active', true)
-        .order('rating', { ascending: false, nullsFirst: false })
-        .limit(10);
-
-      if (topRated && topRated.length > 0) {
-        recommendationSections.push({
-          title: 'Mais Bem Avaliados',
-          subtitle: 'Os favoritos da comunidade',
-          items: topRated.map(r => ({ ...r, matchScore: Math.floor(85 + Math.random() * 15) }))
-        });
-      }
-
-      // 2. Based on user preferences (if available)
-      if (currentUser?.occasions && currentUser.occasions.length > 0) {
-        const { data: byOccasion } = await supabase
-          .from('restaurants')
-          .select('*')
-          .eq('is_active', true)
-          .contains('occasions', currentUser.occasions.slice(0, 2))
-          .limit(10);
-
-        if (byOccasion && byOccasion.length > 0) {
-          recommendationSections.push({
-            title: 'Para suas ocasiões',
-            subtitle: `Perfeitos para ${currentUser.occasions[0]?.toLowerCase() || 'você'}`,
-            items: byOccasion.map(r => ({ ...r, matchScore: Math.floor(80 + Math.random() * 20) }))
-          });
-        }
-      }
-
-      // 3. New restaurants
-      const { data: newest } = await supabase
-        .from('restaurants')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (newest && newest.length > 0) {
-        recommendationSections.push({
-          title: 'Novidades',
-          subtitle: 'Recém chegados na plataforma',
-          items: newest.map(r => ({ ...r, matchScore: Math.floor(70 + Math.random() * 20) }))
-        });
-      }
-
-      // 4. By cuisine type (excluding user dislikes)
-      const dislikedCuisines = currentUser?.cuisines_disliked || [];
-      const { data: byCuisine } = await supabase
-        .from('restaurants')
-        .select('*')
-        .eq('is_active', true)
-        .limit(30);
-
-      if (byCuisine && byCuisine.length > 0) {
-        // Filter out disliked cuisines
-        const filtered = byCuisine.filter(r => {
-          if (!r.cuisine_types || r.cuisine_types.length === 0) return true;
-          return !r.cuisine_types.some((c: string) => dislikedCuisines.includes(c));
-        });
-
-        if (filtered.length > 0) {
-          recommendationSections.push({
-            title: 'Feitos para você',
-            subtitle: 'Baseado no seu paladar',
-            items: filtered.slice(0, 10).map(r => ({ ...r, matchScore: Math.floor(75 + Math.random() * 25) }))
-          });
-        }
-      }
-
-      // 5. By neighborhood (if user has location)
-      if (currentUser?.neighborhood) {
-        const { data: nearby } = await supabase
-          .from('restaurants')
-          .select('*')
-          .eq('is_active', true)
-          .ilike('neighborhood', `%${currentUser.neighborhood}%`)
-          .limit(10);
-
-        if (nearby && nearby.length > 0) {
-          recommendationSections.push({
-            title: 'Perto de você',
-            subtitle: `Em ${currentUser.neighborhood}`,
-            items: nearby.map(r => ({ ...r, matchScore: Math.floor(80 + Math.random() * 15) }))
-          });
-        }
-      }
-
-      // If no sections, show general recommendations
-      if (recommendationSections.length === 0) {
-        const { data: general } = await supabase
-          .from('restaurants')
-          .select('*')
-          .eq('is_active', true)
-          .limit(20);
-
-        if (general && general.length > 0) {
-          recommendationSections.push({
-            title: 'Descubra',
-            subtitle: 'Restaurantes para explorar',
-            items: general.map(r => ({ ...r, matchScore: Math.floor(70 + Math.random() * 20) }))
-          });
-        }
-      }
+      // Usar o novo serviço de recomendações baseado em preferências e reviews
+      const recommendationSections = await RecommendationService.getRecommendations(
+        supabase,
+        currentUser
+      );
 
       setSections(recommendationSections);
     } catch (err) {
@@ -218,14 +123,14 @@ export const Recommendations: React.FC = () => {
                       <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-md px-2 py-1 rounded-full flex items-center gap-1 shadow-sm">
                         <span className="material-symbols-outlined text-primary text-[16px] filled">favorite</span>
                         <span className="text-primary text-xs font-extrabold">
-                          {(restaurant as any).matchScore || Math.floor(80 + Math.random() * 15)}% Match
+                          {restaurant.matchScore}% Match
                         </span>
                       </div>
-                      
+
                       {/* Content */}
                       <div className="p-4 bg-white">
                         <h4 className="font-bold text-lg leading-tight mb-1">{restaurant.name}</h4>
-                        <div className="flex items-center gap-2 text-xs text-gray-500 mb-3">
+                        <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
                            <span>{restaurant.cuisine_types?.[0] || 'Restaurante'}</span>
                            <span>•</span>
                            <span>{restaurant.price_level ? '$'.repeat(restaurant.price_level) : '$$'}</span>
@@ -236,6 +141,19 @@ export const Recommendations: React.FC = () => {
                              </>
                            )}
                         </div>
+                        {/* Match Reasons */}
+                        {restaurant.matchReasons && restaurant.matchReasons.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-3">
+                            {restaurant.matchReasons.slice(0, 2).map((reason, idx) => (
+                              <span
+                                key={idx}
+                                className="text-[10px] px-2 py-0.5 bg-primary/10 text-primary rounded-full font-bold"
+                              >
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         <button className="w-full py-2.5 rounded-xl bg-black/5 text-dark font-bold text-sm hover:bg-black/10 transition-colors">
                            Ver detalhes
                         </button>

@@ -20,7 +20,17 @@ export const CUISINE_OPTIONS = [
   { label: 'Vegetariana', icon: 'eco' },
   { label: 'Vegana', icon: 'spa' },
   { label: 'Sanduíches', icon: 'bakery_dining' },
-  { label: 'Padaria', icon: 'cake' }
+  { label: 'Padaria', icon: 'cake' },
+  { label: 'Doceria/Confeitaria', icon: 'cookie' },
+  { label: 'Cafeteria/Café', icon: 'coffee' },
+  { label: 'Sorveteria', icon: 'icecream' },
+  { label: 'Açaí', icon: 'nutrition' },
+  { label: 'Lanchonete', icon: 'restaurant' },
+  { label: 'Tapiocaria', icon: 'flatware' },
+  { label: 'Creperia', icon: 'brunch_dining' },
+  { label: 'Pastelaria', icon: 'breakfast_dining' },
+  { label: 'Food Truck', icon: 'local_shipping' },
+  { label: 'Petiscaria/Boteco', icon: 'sports_bar' }
 ];
 
 export const OCCASION_GROUPS = [

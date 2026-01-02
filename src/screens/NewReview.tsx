@@ -1,8 +1,8 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Restaurant, User, Review } from '../types';
 import { useAppContext } from '../AppContext';
-import { DEFAULT_AVATAR, DEFAULT_RESTAURANT } from '../constants';
+import { DEFAULT_AVATAR, DEFAULT_RESTAURANT, OCCASION_GROUPS } from '../constants';
 
 type ReviewType = 'presencial' | 'delivery';
 
@@ -54,10 +54,20 @@ export const NewReview: React.FC = () => {
     comida: 5.0,
     apresentacao: 5.0,
     atendimento: 5.0,
+    ambiente: 5.0,
     embalagem: 5.0,
     tempoEntrega: 5.0,
-    qualidadeComida: 5.0
+    qualidadeComida: 5.0,
+    custoBeneficioDelivery: 5.0
   });
+  const [voltaria, setVoltaria] = useState<boolean | null>(null);
+  const [selectedOccasions, setSelectedOccasions] = useState<string[]>([]);
+  const [showOccasionModal, setShowOccasionModal] = useState(false);
+  const [showDescriptionWarning, setShowDescriptionWarning] = useState(false);
+
+  // Drag and drop state
+  const [draggedPhotoIndex, setDraggedPhotoIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Check for edit mode or passed restaurant state
   useEffect(() => {
@@ -92,19 +102,29 @@ export const NewReview: React.FC = () => {
       if (review.review_type === 'delivery') {
         setScores(prev => ({
           ...prev,
-          embalagem: review.score_1 || 5.0,
-          tempoEntrega: review.score_2 || 5.0,
-          qualidadeComida: review.score_3 || 5.0,
-          apresentacao: review.score_4 || 5.0
+          qualidadeComida: review.score_1 || 5.0,
+          apresentacao: review.score_2 || 5.0,
+          custoBeneficioDelivery: review.score_3 || 5.0,
+          embalagem: review.score_4 || 5.0,
+          tempoEntrega: review.score_5 || 5.0
         }));
       } else {
         setScores(prev => ({
           ...prev,
-          proposta: review.score_1 || 5.0,
-          comida: review.score_2 || 5.0,
-          apresentacao: review.score_3 || 5.0,
-          atendimento: review.score_4 || 5.0
+          comida: review.score_1 || 5.0,
+          apresentacao: review.score_2 || 5.0,
+          proposta: review.score_3 || 5.0,
+          atendimento: review.score_4 || 5.0,
+          ambiente: review.score_5 || 5.0
         }));
+      }
+
+      // Preencher voltaria e occasions
+      if (review.voltaria !== undefined && review.voltaria !== null) {
+        setVoltaria(review.voltaria);
+      }
+      if (review.occasions && Array.isArray(review.occasions)) {
+        setSelectedOccasions(review.occasions);
       }
     } else if (location.state?.restaurant) {
       const r = location.state.restaurant as Restaurant;
@@ -166,26 +186,36 @@ export const NewReview: React.FC = () => {
   const getCriteria = () => {
     if (reviewType === 'presencial') {
       return [
-        { key: 'comida', label: 'Comida', dbKey: 'score_2' },
-        { key: 'proposta', label: 'Proposta', dbKey: 'score_1' },
-        { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_3' },
-        { key: 'atendimento', label: 'Atendimento', dbKey: 'score_4' }
+        { key: 'comida', label: 'Comida', dbKey: 'score_1', weight: 50 },
+        { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_2', weight: 10 },
+        { key: 'proposta', label: 'Proposta/Custo Benefício', dbKey: 'score_3', weight: 25 },
+        { key: 'atendimento', label: 'Atendimento', dbKey: 'score_4', weight: 15 },
+        { key: 'ambiente', label: 'Ambiente', dbKey: 'score_5', weight: 10 }
       ];
     } else {
       return [
-        { key: 'qualidadeComida', label: 'Qualidade da comida', dbKey: 'score_3' },
-        { key: 'embalagem', label: 'Embalagem', dbKey: 'score_1' },
-        { key: 'tempoEntrega', label: 'Tempo de entrega', dbKey: 'score_2' },
-        { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_4' }
+        { key: 'qualidadeComida', label: 'Qualidade da comida', dbKey: 'score_1', weight: 50 },
+        { key: 'apresentacao', label: 'Apresentação', dbKey: 'score_2', weight: 10 },
+        { key: 'custoBeneficioDelivery', label: 'Custo Benefício', dbKey: 'score_3', weight: 25 },
+        { key: 'embalagem', label: 'Embalagem', dbKey: 'score_4', weight: 15 },
+        { key: 'tempoEntrega', label: 'Tempo de entrega', dbKey: 'score_5', weight: 10 }
       ];
     }
   };
 
   const calculateAverage = () => {
     const criteria = getCriteria();
-    const sum = criteria.reduce((acc, curr) => acc + (scores[curr.key as keyof typeof scores] || 0), 0);
-    return (sum / criteria.length).toFixed(1);
+    // Média ponderada: soma(score * peso) / soma(pesos)
+    const totalWeight = criteria.reduce((acc, curr) => acc + curr.weight, 0);
+    const weightedSum = criteria.reduce((acc, curr) => {
+      const score = scores[curr.key as keyof typeof scores] || 0;
+      return acc + (score * curr.weight);
+    }, 0);
+    return (weightedSum / totalWeight).toFixed(1);
   };
+
+  // Verifica se a descrição tem 200+ caracteres para a nota contar
+  const descriptionCountsForScore = description.trim().length >= 200;
 
   // --- ACTIONS: NAVIGATION ---
 
@@ -216,8 +246,18 @@ export const NewReview: React.FC = () => {
         showToast("Adicione uma descrição");
         return;
       }
+      // Mostrar aviso se descrição < 200 caracteres
+      if (description.trim().length < 200) {
+        setShowDescriptionWarning(true);
+        return;
+      }
       setStep(2);
     }
+  };
+
+  const proceedWithoutMinDescription = () => {
+    setShowDescriptionWarning(false);
+    setStep(2);
   };
 
   const handlePostReview = async () => {
@@ -230,7 +270,7 @@ export const NewReview: React.FC = () => {
       if (isEditMode && editReviewId) {
         // --- MODO EDIÇÃO: Update da review existente ---
         const existingPhotos = selectedPhotos.filter(p => p.isExisting);
-        
+
         const updateData: any = {
           description: description.trim(),
           review_type: reviewType === 'presencial' ? 'in_person' : 'delivery',
@@ -238,6 +278,10 @@ export const NewReview: React.FC = () => {
           score_2: scores[criteria[1].key as keyof typeof scores],
           score_3: scores[criteria[2].key as keyof typeof scores],
           score_4: scores[criteria[3].key as keyof typeof scores],
+          score_5: scores[criteria[4].key as keyof typeof scores],
+          voltaria,
+          occasions: selectedOccasions,
+          average_score: parseFloat(calculateAverage()),
           photos: existingPhotos.map((p, i) => ({ url: p.preview, order: i + 1 })),
           updated_at: new Date().toISOString()
         };
@@ -274,8 +318,12 @@ export const NewReview: React.FC = () => {
             score_1: scores[criteria[0].key as keyof typeof scores],
             score_2: scores[criteria[1].key as keyof typeof scores],
             score_3: scores[criteria[2].key as keyof typeof scores],
-            score_4: scores[criteria[3].key as keyof typeof scores]
+            score_4: scores[criteria[3].key as keyof typeof scores],
+            score_5: scores[criteria[4].key as keyof typeof scores]
           },
+          voltaria,
+          occasions: selectedOccasions,
+          averageScore: parseFloat(calculateAverage()),
           photoFiles: selectedPhotos.filter(p => p.file).map(p => p.file!),
           taggedUserIds: taggedUsers.map(u => u.id),
           isQuickPost
@@ -314,7 +362,7 @@ export const NewReview: React.FC = () => {
     const files = e.target.files;
     if (!files) return;
 
-    const remainingSlots = 5 - selectedPhotos.length;
+    const remainingSlots = 10 - selectedPhotos.length;
     const filesToAdd = Array.from(files).slice(0, remainingSlots);
 
     for (const file of filesToAdd) {
@@ -333,6 +381,60 @@ export const NewReview: React.FC = () => {
     }
 
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // --- DRAG AND DROP HANDLERS ---
+  const handleDragStart = (index: number) => {
+    setDraggedPhotoIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    setDragOverIndex(index);
+  };
+
+  const handleDragEnd = () => {
+    if (draggedPhotoIndex !== null && dragOverIndex !== null && draggedPhotoIndex !== dragOverIndex) {
+      const newPhotos = [...selectedPhotos];
+      const [draggedPhoto] = newPhotos.splice(draggedPhotoIndex, 1);
+      newPhotos.splice(dragOverIndex, 0, draggedPhoto);
+      setSelectedPhotos(newPhotos);
+    }
+    setDraggedPhotoIndex(null);
+    setDragOverIndex(null);
+  };
+
+  // Touch drag and drop for mobile
+  const handleTouchStart = (index: number) => {
+    setDraggedPhotoIndex(index);
+  };
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (draggedPhotoIndex === null) return;
+
+    const touch = e.touches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    const photoContainer = element?.closest('[data-photo-index]');
+
+    if (photoContainer) {
+      const index = parseInt(photoContainer.getAttribute('data-photo-index') || '-1');
+      if (index >= 0) {
+        setDragOverIndex(index);
+      }
+    }
+  }, [draggedPhotoIndex]);
+
+  const handleTouchEnd = () => {
+    handleDragEnd();
+  };
+
+  // Toggle occasion selection
+  const toggleOccasion = (occasion: string) => {
+    setSelectedOccasions(prev =>
+      prev.includes(occasion)
+        ? prev.filter(o => o !== occasion)
+        : [...prev, occasion]
+    );
   };
 
   // --- ACTIONS: RESTAURANT ---
@@ -475,35 +577,64 @@ export const NewReview: React.FC = () => {
           className="hidden"
         />
 
-        {/* Selected Photos */}
+        {/* Selected Photos with Drag and Drop */}
         {selectedPhotos.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
+          <div
+            className="flex gap-2 overflow-x-auto no-scrollbar py-2"
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
             {selectedPhotos.map((photo, i) => (
-              <div 
+              <div
                 key={photo.id}
-                className="relative size-20 shrink-0 rounded-xl overflow-hidden border border-black/5 shadow-sm"
+                data-photo-index={i}
+                draggable
+                onDragStart={() => handleDragStart(i)}
+                onDragOver={(e) => handleDragOver(e, i)}
+                onDragEnd={handleDragEnd}
+                onTouchStart={() => handleTouchStart(i)}
+                className={`relative size-20 shrink-0 rounded-xl overflow-hidden border-2 shadow-sm cursor-grab active:cursor-grabbing transition-all ${
+                  draggedPhotoIndex === i
+                    ? 'opacity-50 scale-95 border-primary'
+                    : dragOverIndex === i
+                      ? 'border-primary border-dashed'
+                      : 'border-black/5'
+                }`}
               >
                 <img src={photo.preview} className="w-full h-full object-cover" alt="Selected" />
-                <button 
+                {i === 0 && (
+                  <span className="absolute bottom-1 left-1 bg-primary text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
+                    CAPA
+                  </span>
+                )}
+                <button
                   onClick={() => handleRemovePhoto(i)}
                   className="absolute top-1 right-1 bg-black/50 text-white rounded-full size-5 flex items-center justify-center hover:bg-red-500 transition-colors"
                 >
                   <span className="material-symbols-outlined text-[12px]">close</span>
                 </button>
+                <span className="absolute bottom-1 right-1 bg-black/50 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                  {i + 1}
+                </span>
               </div>
             ))}
           </div>
         )}
+        {selectedPhotos.length > 0 && (
+          <p className="text-xs text-gray-400 text-center">
+            Arraste as fotos para reordenar. A primeira será a capa.
+          </p>
+        )}
 
         {/* Photo Buttons - só mostra em modo criação */}
-        {!isEditMode && selectedPhotos.length < 5 && (
+        {!isEditMode && selectedPhotos.length < 10 && (
           <div className="space-y-2">
-            <button 
+            <button
               onClick={() => fileInputRef.current?.click()}
               className="w-full h-12 rounded-xl border-2 border-dashed border-gray-300 text-gray-500 font-bold hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2"
             >
               <span className="material-symbols-outlined">photo_library</span>
-              Adicionar fotos ({selectedPhotos.length}/5)
+              Adicionar fotos ({selectedPhotos.length}/10)
             </button>
             <button 
               onClick={() => {
@@ -540,16 +671,53 @@ export const NewReview: React.FC = () => {
         <label className="text-sm font-bold ml-1 flex items-center gap-1">
           Descrição <span className="text-primary">*</span>
         </label>
-        <textarea 
+        <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           maxLength={700}
-          placeholder="Conte sobre sua experiência..."
+          placeholder="Conte sobre sua experiência... (mínimo 200 caracteres para sua nota contar)"
           className="w-full h-32 p-4 rounded-xl border-2 border-gray-200 bg-white outline-none font-medium focus:border-primary shadow-sm resize-none transition-colors"
         />
-        <div className="text-right text-xs text-gray-400 font-medium">
-          {description.length}/700
+        <div className="flex justify-between items-center">
+          <span className={`text-xs font-medium ${description.length < 200 ? 'text-amber-500' : 'text-green-600'}`}>
+            {description.length < 200
+              ? `Faltam ${200 - description.length} caracteres para sua nota contar`
+              : 'Sua nota vai contar!'
+            }
+          </span>
+          <span className="text-xs text-gray-400 font-medium">
+            {description.length}/700
+          </span>
         </div>
+      </div>
+
+      {/* Occasions Section */}
+      <div className="space-y-3">
+        <label className="text-sm font-bold ml-1">Ocasião</label>
+
+        {selectedOccasions.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {selectedOccasions.map(occasion => (
+              <div key={occasion} className="flex items-center gap-2 bg-primary/10 border border-primary/20 px-3 py-1.5 rounded-full">
+                <span className="text-xs font-bold text-primary">{occasion}</span>
+                <button
+                  onClick={() => toggleOccasion(occasion)}
+                  className="size-4 bg-primary/20 rounded-full flex items-center justify-center hover:bg-red-100 hover:text-red-500"
+                >
+                  <span className="material-symbols-outlined text-[10px] text-primary">close</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          onClick={() => setShowOccasionModal(true)}
+          className="w-full h-12 rounded-xl border-2 border-dashed border-gray-300 text-gray-500 font-bold hover:border-primary hover:text-primary transition-colors flex items-center justify-center gap-2"
+        >
+          <span className="material-symbols-outlined">celebration</span>
+          {selectedOccasions.length > 0 ? 'Editar ocasiões' : 'Adicionar ocasião'}
+        </button>
       </div>
 
       {/* Tag Friends */}
@@ -667,11 +835,99 @@ export const NewReview: React.FC = () => {
             </div>
 
             <div className="p-4 border-t border-gray-100">
-              <button 
+              <button
                 onClick={() => setShowTagModal(false)}
                 className="w-full h-12 bg-dark text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform"
               >
                 Confirmar ({taggedUsers.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- OCCASION MODAL --- */}
+      {showOccasionModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowOccasionModal(false)} />
+          <div className="relative bg-white rounded-3xl w-full max-w-sm h-[80vh] shadow-2xl overflow-hidden flex flex-col animate-bounce-in">
+
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-bold text-lg">Selecionar ocasiões</h3>
+              <button onClick={() => setShowOccasionModal(false)}>
+                <span className="material-symbols-outlined text-gray-500">close</span>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              {OCCASION_GROUPS.map(group => (
+                <div key={group.title}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="material-symbols-outlined text-primary text-[18px]">{group.icon}</span>
+                    <p className="text-sm font-bold text-gray-700">{group.title}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {group.options.map(option => {
+                      const isSelected = selectedOccasions.includes(option.label);
+                      return (
+                        <button
+                          key={option.label}
+                          onClick={() => toggleOccasion(option.label)}
+                          className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold transition-colors ${
+                            isSelected
+                              ? 'bg-primary text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-[14px]">{option.icon}</span>
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowOccasionModal(false)}
+                className="w-full h-12 bg-dark text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform"
+              >
+                Confirmar ({selectedOccasions.length} selecionadas)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- DESCRIPTION WARNING MODAL --- */}
+      {showDescriptionWarning && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDescriptionWarning(false)} />
+          <div className="relative bg-white rounded-2xl p-6 w-full max-w-xs shadow-2xl animate-bounce-in text-center">
+            <div className="size-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <span className="material-symbols-outlined text-amber-500 text-3xl">edit_note</span>
+            </div>
+            <h3 className="font-bold text-lg mb-2">Descrição curta!</h3>
+            <p className="text-secondary text-sm mb-2">
+              Sua descrição tem apenas <strong>{description.length}</strong> caracteres.
+            </p>
+            <p className="text-secondary text-sm mb-6">
+              Com pelo menos <strong>200 caracteres</strong>, sua nota contribui para a média do restaurante e ajuda outros usuários!
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={proceedWithoutMinDescription}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 font-bold text-gray-500"
+              >
+                Continuar assim
+              </button>
+              <button
+                onClick={() => setShowDescriptionWarning(false)}
+                className="flex-1 py-2.5 rounded-xl bg-primary text-white font-bold"
+              >
+                Melhorar texto
               </button>
             </div>
           </div>
@@ -741,7 +997,40 @@ export const NewReview: React.FC = () => {
             );
           })}
         </div>
-        
+
+        <div className="h-px bg-black/5"></div>
+
+        {/* Voltaria? */}
+        <div className="space-y-3">
+          <label className="text-sm font-bold ml-1 text-secondary uppercase tracking-wider">
+            Voltaria?
+          </label>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setVoltaria(true)}
+              className={`flex-1 py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                voltaria === true
+                  ? 'bg-green-500 text-white shadow-lg shadow-green-500/30'
+                  : 'bg-white border border-gray-200 text-gray-500 hover:border-green-300 hover:text-green-600'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[20px]">thumb_up</span>
+              Sim
+            </button>
+            <button
+              onClick={() => setVoltaria(false)}
+              className={`flex-1 py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                voltaria === false
+                  ? 'bg-red-500 text-white shadow-lg shadow-red-500/30'
+                  : 'bg-white border border-gray-200 text-gray-500 hover:border-red-300 hover:text-red-600'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[20px]">thumb_down</span>
+              Não
+            </button>
+          </div>
+        </div>
+
         <div className="h-px bg-black/5"></div>
 
         {/* Average Display */}

@@ -53,19 +53,23 @@ const AppContextInner: React.FC<{ children: ReactNode }> = ({ children }) => {
   const listsHook = useLists();
   const followHook = useFollow();
 
-  // Sync data quando usuário loga
+  // Sync data quando usuário loga - Otimizado para carregar em paralelo
   useEffect(() => {
     const initUserData = async () => {
       if (auth.currentUser?.id) {
-        const data = await auth.fetchUserData(auth.currentUser.id);
+        // Carregar feed em paralelo com dados do usuário para maior velocidade
+        const [data] = await Promise.all([
+          auth.fetchUserData(auth.currentUser.id),
+          feed.refreshFeed(auth.currentUser.id) // Inicia feed imediatamente
+        ]);
+
         if (data) {
           followHook.setFollowing(data.following_ids || []);
           listsHook.setLists(data.lists || []);
-          await feed.refreshFeed(auth.currentUser.id);
         }
       }
     };
-    
+
     if (auth.currentUser && !auth.loading) {
       initUserData();
     }

@@ -4,6 +4,7 @@ import { Sidebar } from '../components/Navigation';
 import { List } from '../types';
 import { useAppContext } from '../AppContext';
 import { DEFAULT_COVER } from '../constants';
+import { StorageService } from '../services/storage.service';
 
 // --- SKELETON ---
 const SkeletonListCard = () => (
@@ -16,18 +17,19 @@ const SkeletonListCard = () => (
 // --- MAIN COMPONENT ---
 export const Lists: React.FC = () => {
   const navigate = useNavigate();
-  const { lists, createList, updateList, deleteList, loading } = useAppContext();
-  
+  const { lists, createList, updateList, deleteList, loading, supabase, currentUser } = useAppContext();
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create');
   const [selectedList, setSelectedList] = useState<List | null>(null);
   const [saving, setSaving] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     name: '',
     isPrivate: false,
-    cover: ''
+    coverPreview: '', // Preview local (base64 ou URL existente)
+    coverFile: null as File | null // Arquivo para upload
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -41,7 +43,7 @@ export const Lists: React.FC = () => {
   const openCreateModal = () => {
     setModalMode('create');
     setSelectedList(null);
-    setFormData({ name: '', isPrivate: false, cover: '' });
+    setFormData({ name: '', isPrivate: false, coverPreview: '', coverFile: null });
     setIsModalOpen(true);
   };
 
@@ -52,27 +54,55 @@ export const Lists: React.FC = () => {
     setFormData({
       name: list.name,
       isPrivate: list.is_private || false,
-      cover: list.cover_photo_url || ''
+      coverPreview: list.cover_photo_url || '',
+      coverFile: null
     });
     setIsModalOpen(true);
   };
 
   const handleSave = async () => {
     if (!formData.name.trim()) return;
-    
+    if (!currentUser?.id) return;
+
     setSaving(true);
     try {
+      let coverUrl: string | undefined = undefined;
+
+      // Se há um arquivo novo para upload
+      if (formData.coverFile) {
+        // Para edição, usar o ID da lista existente; para criação, gerar um ID temporário
+        const listIdForUpload = selectedList?.id || crypto.randomUUID();
+
+        const uploadedUrl = await StorageService.uploadListCover(
+          supabase,
+          currentUser.id,
+          listIdForUpload,
+          formData.coverFile
+        );
+
+        if (uploadedUrl) {
+          coverUrl = uploadedUrl;
+        } else {
+          alert('Erro ao fazer upload da imagem. Tente novamente.');
+          setSaving(false);
+          return;
+        }
+      } else if (formData.coverPreview && !formData.coverPreview.startsWith('data:')) {
+        // Se tem preview mas não é base64, é uma URL existente - manter
+        coverUrl = formData.coverPreview;
+      }
+
       if (modalMode === 'create') {
-        await createList(formData.name.trim(), formData.isPrivate, formData.cover || undefined);
+        await createList(formData.name.trim(), formData.isPrivate, coverUrl);
       } else if (modalMode === 'edit' && selectedList) {
         await updateList(selectedList.id, {
           name: formData.name.trim(),
           is_private: formData.isPrivate,
-          cover_photo_url: formData.cover || undefined
+          cover_photo_url: coverUrl
         });
       }
       setIsModalOpen(false);
-      setFormData({ name: '', isPrivate: false, cover: '' });
+      setFormData({ name: '', isPrivate: false, coverPreview: '', coverFile: null });
       setSelectedList(null);
     } catch (error) {
       console.error('Erro ao salvar lista:', error);
@@ -108,18 +138,22 @@ export const Lists: React.FC = () => {
   const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          setFormData(prev => ({ ...prev, cover: reader.result as string }));
-        }
-      };
-      reader.readAsDataURL(file);
+      // Guardar o arquivo para upload posterior
+      const previewUrl = URL.createObjectURL(file);
+      setFormData(prev => ({
+        ...prev,
+        coverFile: file,
+        coverPreview: previewUrl
+      }));
     }
   };
 
   const removeCover = () => {
-    setFormData(prev => ({ ...prev, cover: '' }));
+    // Revogar URL do preview se existir e for blob
+    if (formData.coverPreview?.startsWith('blob:')) {
+      URL.revokeObjectURL(formData.coverPreview);
+    }
+    setFormData(prev => ({ ...prev, coverPreview: '', coverFile: null }));
   };
 
   return (
@@ -257,12 +291,12 @@ export const Lists: React.FC = () => {
                   className="relative w-full aspect-[2/1] bg-gray-50 rounded-xl border border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer overflow-hidden group hover:border-primary/50 transition-colors"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {formData.cover ? (
+                  {formData.coverPreview ? (
                     <>
-                      <img 
-                        src={formData.cover} 
-                        alt="Cover preview" 
-                        className="absolute inset-0 w-full h-full object-cover" 
+                      <img
+                        src={formData.coverPreview}
+                        alt="Cover preview"
+                        className="absolute inset-0 w-full h-full object-cover"
                       />
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <span className="material-symbols-outlined text-white text-3xl">edit</span>
@@ -284,7 +318,7 @@ export const Lists: React.FC = () => {
                 </div>
                 
                 {/* Remove cover button */}
-                {formData.cover && (
+                {formData.coverPreview && (
                   <button
                     onClick={removeCover}
                     className="absolute -top-2 -right-2 size-6 bg-red-500 text-white rounded-full flex items-center justify-center shadow-md hover:bg-red-600 transition-colors"

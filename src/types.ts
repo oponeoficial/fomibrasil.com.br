@@ -34,6 +34,7 @@ export interface Restaurant {
   longitude?: number;
   phone?: string;
   website?: string;
+  instagram?: string;
   google_maps_url?: string;
   photo_url: string;
   cuisine_types?: string[];
@@ -72,7 +73,12 @@ export interface Review {
   score_2?: number;
   score_3?: number;
   score_4?: number;
-  
+  score_5?: number;
+
+  // Additional review data
+  voltaria?: boolean | null;
+  occasions?: string[];
+
   // Frontend helpers
   likes_count?: number;
   comments_count?: number;

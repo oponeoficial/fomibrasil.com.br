@@ -5,3 +5,4 @@ export { FollowService } from './follow.service';
 export { StorageService } from './storage.service';
 export { NotificationService } from './notification.service';
 export type { Notification } from './notification.service';
+export { RecommendationService } from './recommendation.service';

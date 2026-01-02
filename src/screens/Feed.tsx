@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sidebar } from '../components/Navigation';
 import { Review, Comment } from '../types';
 import { useAppContext } from '../AppContext';
 import { DEFAULT_AVATAR } from '../constants';
+import { RestaurantDetailsModal } from '../components/RestaurantDetailsModal';
 
 // --- SUB-COMPONENTS ---
 
@@ -485,6 +486,53 @@ export const Feed: React.FC = () => {
 
   // Photo carousel state per review
   const [photoIndexes, setPhotoIndexes] = useState<Record<string, number>>({});
+  const photoContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Restaurant details modal
+  const [selectedRestaurant, setSelectedRestaurant] = useState<any>(null);
+
+  // Tagged users visibility state
+  const [showTaggedUsers, setShowTaggedUsers] = useState<Record<string, boolean>>({});
+
+  // Expanded description state
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Record<string, boolean>>({});
+
+  // Unread notifications count
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  // Fetch unread notifications count
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const fetchUnreadCount = async () => {
+      const { count } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', currentUser.id)
+        .eq('is_read', false);
+
+      setUnreadNotifications(count || 0);
+    };
+
+    fetchUnreadCount();
+
+    // Subscribe to new notifications
+    const channel = supabase
+      .channel('notifications')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUser.id}`
+      }, () => {
+        setUnreadNotifications(prev => prev + 1);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, supabase]);
 
   // Pull to Refresh Logic
   useEffect(() => {
@@ -625,8 +673,29 @@ export const Feed: React.FC = () => {
     setPhotoIndexes(prev => ({ ...prev, [reviewId]: index }));
   };
 
+  const scrollToPhoto = useCallback((reviewId: string, direction: 'prev' | 'next', totalPhotos: number) => {
+    const container = photoContainerRefs.current[reviewId];
+    if (!container) return;
+
+    const currentIndex = photoIndexes[reviewId] || 0;
+    let newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
+    newIndex = Math.max(0, Math.min(newIndex, totalPhotos - 1));
+
+    const width = container.offsetWidth;
+    container.scrollTo({ left: newIndex * width, behavior: 'smooth' });
+    setPhotoIndexes(prev => ({ ...prev, [reviewId]: newIndex }));
+  }, [photoIndexes]);
+
   const hasPhotos = (review: Review) => {
     return review.photos && review.photos.length > 0;
+  };
+
+  const toggleTaggedUsers = (reviewId: string) => {
+    setShowTaggedUsers(prev => ({ ...prev, [reviewId]: !prev[reviewId] }));
+  };
+
+  const toggleDescription = (reviewId: string) => {
+    setExpandedDescriptions(prev => ({ ...prev, [reviewId]: !prev[reviewId] }));
   };
 
   return (
@@ -644,23 +713,27 @@ export const Feed: React.FC = () => {
       )}
 
       {/* Modals */}
-      <CommentsModal 
-        isOpen={modalType === 'comments'} 
-        onClose={() => setModalType(null)} 
-        review={getActiveReview()} 
+      <CommentsModal
+        isOpen={modalType === 'comments'}
+        onClose={() => setModalType(null)}
+        review={getActiveReview()}
       />
-      <ListModal 
-        isOpen={modalType === 'lists'} 
-        onClose={() => setModalType(null)} 
-        review={getActiveReview()} 
+      <ListModal
+        isOpen={modalType === 'lists'}
+        onClose={() => setModalType(null)}
+        review={getActiveReview()}
         onShowToast={showToast}
       />
-      <OptionsModal 
-        isOpen={modalType === 'options'} 
-        onClose={() => setModalType(null)} 
+      <OptionsModal
+        isOpen={modalType === 'options'}
+        onClose={() => setModalType(null)}
         review={getActiveReview()}
         onEdit={handleEditReview}
         onDelete={handleDeleteReview}
+      />
+      <RestaurantDetailsModal
+        restaurant={selectedRestaurant}
+        onClose={() => setSelectedRestaurant(null)}
       />
 
       {/* Header */}
@@ -680,6 +753,11 @@ export const Feed: React.FC = () => {
           
           <button onClick={() => navigate('/notifications')} className="size-10 flex items-center justify-center rounded-full hover:bg-black/5 active:bg-black/10 transition-colors relative">
             <span className="material-symbols-outlined text-3xl text-dark">notifications</span>
+            {unreadNotifications > 0 && (
+              <span className="absolute top-1 right-1 size-4 bg-red-500 rounded-full flex items-center justify-center text-[10px] font-bold text-white">
+                {unreadNotifications > 9 ? '9+' : unreadNotifications}
+              </span>
+            )}
           </button>
         </div>
 
@@ -734,30 +812,52 @@ export const Feed: React.FC = () => {
            displayedReviews.map((review) => {
              const currentPhotoIndex = photoIndexes[review.id] || 0;
              const showPhotos = hasPhotos(review);
-             
+             const totalPhotos = review.photos?.length || 0;
+             const isFirstPhoto = currentPhotoIndex === 0;
+             const isLastPhoto = currentPhotoIndex === totalPhotos - 1;
+             const hasTaggedUsers = review.tagged_users && review.tagged_users.length > 0;
+             const isDescriptionExpanded = expandedDescriptions[review.id];
+             const descriptionLength = review.description?.length || 0;
+             const shouldTruncate = descriptionLength > 80 && !isDescriptionExpanded;
+
              return (
                <article key={review.id} className="bg-white rounded-3xl shadow-sm border border-black/5 overflow-hidden animate-fade-in">
-                 
+
                  {/* User Header */}
                  <div className="flex items-center justify-between p-4 pb-2">
-                   <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate(`/profile/@${review.user?.username}`)}>
-                      <img 
-                        src={review.user?.profile_photo_url || DEFAULT_AVATAR} 
-                        className="size-10 rounded-full object-cover border border-gray-100" 
-                        alt={review.user?.username} 
-                      />
+                   <div className="flex items-center gap-3">
+                      <div
+                        className="cursor-pointer"
+                        onClick={() => navigate(`/profile/@${review.user?.username}`)}
+                      >
+                        <img
+                          src={review.user?.profile_photo_url || DEFAULT_AVATAR}
+                          className="size-10 rounded-full object-cover border border-gray-100"
+                          alt={review.user?.username}
+                        />
+                      </div>
                       <div className="leading-tight">
                          <div className="flex items-center gap-1">
-                           <p className="font-bold text-sm text-dark">{review.user?.username}</p>
+                           <p
+                             className="font-bold text-sm text-dark cursor-pointer hover:underline"
+                             onClick={() => navigate(`/profile/@${review.user?.username}`)}
+                           >
+                             {review.user?.username}
+                           </p>
                            {review.user?.is_verified && (
                              <img src="/selo-verificado.png" alt="Verificado" className="size-4" />
                            )}
                          </div>
-                         <p className="text-xs text-gray-500 flex items-center gap-1">
-                           {review.restaurant?.name} 
-                           <span className="text-[10px]">•</span>
+                         {/* Restaurant name - larger and clickable */}
+                         <button
+                           onClick={() => setSelectedRestaurant(review.restaurant)}
+                           className="text-sm font-semibold text-primary hover:underline text-left"
+                         >
+                           {review.restaurant?.name}
+                         </button>
+                         <p className="text-[11px] text-gray-400 flex items-center gap-1">
                            {getReviewTypeLabel(review.review_type)}
-                           <span className="text-[10px]">•</span>
+                           <span>•</span>
                            {formatTimeAgo(review.created_at)}
                          </p>
                       </div>
@@ -766,7 +866,7 @@ export const Feed: React.FC = () => {
                      <button onClick={() => { setActiveReviewId(review.id); setModalType('options'); }} className="text-gray-400 hover:text-dark p-1">
                         <span className="material-symbols-outlined">more_horiz</span>
                      </button>
-                     {/* Rating badge for text-only posts - appears below ... */}
+                     {/* Rating badge for text-only posts */}
                      {!showPhotos && (
                        <div className="flex items-center gap-1 bg-yellow-50 px-2 py-1 rounded-full">
                          <span className="text-yellow-500 text-xs font-bold">{review.average_score?.toFixed(1) || '0.0'}</span>
@@ -779,37 +879,100 @@ export const Feed: React.FC = () => {
                  {/* Photo Carousel - Only if has photos */}
                  {showPhotos ? (
                    <div className="relative w-full aspect-[4/5] bg-gray-100">
-                      <div 
+                      <div
+                        ref={el => photoContainerRefs.current[review.id] = el}
                         className="w-full h-full overflow-x-auto snap-x snap-mandatory flex no-scrollbar"
                         onScroll={(e) => handlePhotoScroll(review.id, e)}
+                        onClick={() => hasTaggedUsers && toggleTaggedUsers(review.id)}
                       >
                         {review.photos!.map((photo, idx) => (
-                           <img 
-                             key={idx} 
-                             src={photo.url} 
-                             className="w-full h-full object-cover shrink-0 snap-center" 
-                             alt="Review" 
+                           <img
+                             key={idx}
+                             src={photo.url}
+                             className="w-full h-full object-cover shrink-0 snap-center"
+                             alt="Review"
                            />
                         ))}
                       </div>
-                      
+
+                      {/* Navigation Arrows */}
+                      {totalPhotos > 1 && (
+                        <>
+                          {/* Left Arrow - only show if not first photo */}
+                          {!isFirstPhoto && (
+                            <button
+                              onClick={() => scrollToPhoto(review.id, 'prev', totalPhotos)}
+                              className="absolute left-2 top-1/2 -translate-y-1/2 size-8 bg-black/30 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-black/50 transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-[20px]">chevron_left</span>
+                            </button>
+                          )}
+                          {/* Right Arrow - only show if not last photo */}
+                          {!isLastPhoto && (
+                            <button
+                              onClick={() => scrollToPhoto(review.id, 'next', totalPhotos)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 size-8 bg-black/30 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-black/50 transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-[20px]">chevron_right</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {/* Rating Badge */}
                       <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm px-2 py-1 rounded-full text-white text-xs font-bold">
                          {review.average_score?.toFixed(1) || '0.0'} <span className="text-yellow-400">★</span>
                       </div>
-                      
-                      {review.photos!.length > 1 && (
+
+                      {/* Tagged Users Icon (bottom left) */}
+                      {hasTaggedUsers && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleTaggedUsers(review.id); }}
+                          className="absolute bottom-3 left-3 size-7 bg-black/40 backdrop-blur-sm rounded-full flex items-center justify-center text-white"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">person</span>
+                        </button>
+                      )}
+
+                      {/* Tagged Users Overlay */}
+                      {hasTaggedUsers && showTaggedUsers[review.id] && (
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center animate-fade-in">
+                          <div className="flex flex-wrap gap-2 justify-center p-4">
+                            {review.tagged_users!.map((user: any) => (
+                              <button
+                                key={user.id}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate(`/profile/@${user.username}`);
+                                }}
+                                className="bg-black/60 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-sm font-medium flex items-center gap-2 hover:bg-black/80 transition-colors"
+                              >
+                                <img
+                                  src={user.profile_photo_url || DEFAULT_AVATAR}
+                                  className="size-5 rounded-full object-cover"
+                                  alt={user.username}
+                                />
+                                @{user.username}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Photo Dots */}
+                      {totalPhotos > 1 && (
                          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
                             {review.photos!.map((_, i) => (
-                               <div 
-                                 key={i} 
-                                 className={`size-1.5 rounded-full transition-colors ${i === currentPhotoIndex ? 'bg-white' : 'bg-white/50'}`} 
+                               <div
+                                 key={i}
+                                 className={`size-1.5 rounded-full transition-colors ${i === currentPhotoIndex ? 'bg-white' : 'bg-white/50'}`}
                                />
                             ))}
                          </div>
                       )}
                    </div>
                  ) : (
-                   /* Tweet-style: Description directly, no gray area */
+                   /* Tweet-style: Description directly */
                    <div className="px-4 pb-3">
                      <p className="text-[15px] text-dark leading-relaxed whitespace-pre-wrap">
                        {review.description}
@@ -823,28 +986,60 @@ export const Feed: React.FC = () => {
                        <button onClick={() => handleToggleLike(review.id)} className="flex items-center gap-1 group">
                           <span className={`material-symbols-outlined text-[26px] transition-transform active:scale-75 ${review.is_liked ? 'filled text-red-500' : 'text-dark group-hover:text-red-500'}`}>favorite</span>
                        </button>
-                       <button onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }} className="flex items-center gap-1 group">
-                          <span className="material-symbols-outlined text-[26px] text-dark group-hover:text-primary transition-colors">chat_bubble</span>
+                       {/* Comment icon - more circular */}
+                       <button onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }} className="flex items-center gap-1 group relative">
+                          <span className="material-symbols-outlined text-[26px] text-dark group-hover:text-primary transition-colors">mode_comment</span>
+                          {(review.comments_count || 0) > 0 && (
+                            <span className="absolute -top-1 -right-2 bg-primary text-white text-[10px] font-bold px-1.5 rounded-full min-w-[18px] text-center">
+                              {review.comments_count}
+                            </span>
+                          )}
                        </button>
                        <button onClick={() => handleShare(review)} className="flex items-center gap-1 group">
                           <span className="material-symbols-outlined text-[26px] text-dark group-hover:text-primary transition-colors">send</span>
                        </button>
                     </div>
-                    <button onClick={() => { setActiveReviewId(review.id); setModalType('lists'); }}>
+                    {/* Save button with + */}
+                    <button onClick={() => { setActiveReviewId(review.id); setModalType('lists'); }} className="relative">
                        <span className={`material-symbols-outlined text-[28px] transition-transform active:scale-75 ${review.is_saved ? 'filled text-primary' : 'text-dark'}`}>bookmark</span>
+                       {!review.is_saved && (
+                         <span className="absolute -top-0.5 -right-0.5 bg-primary text-white text-[10px] font-bold size-3.5 rounded-full flex items-center justify-center">+</span>
+                       )}
                     </button>
                  </div>
-                 
+
                  {/* Description - Only shown when there are photos */}
                  {showPhotos && (
                    <div className="px-4 pb-5">
                       <div className="text-sm font-bold text-dark mb-1">{review.likes_count || 0} curtidas</div>
                       <p className="text-sm text-dark leading-relaxed">
                          <span className="font-bold mr-2">{review.user?.username}</span>
-                         {review.description}
+                         {shouldTruncate ? (
+                           <>
+                             {review.description?.slice(0, 80)}...
+                             <button
+                               onClick={() => toggleDescription(review.id)}
+                               className="text-gray-500 font-medium ml-1"
+                             >
+                               mais
+                             </button>
+                           </>
+                         ) : (
+                           <>
+                             {review.description}
+                             {descriptionLength > 80 && isDescriptionExpanded && (
+                               <button
+                                 onClick={() => toggleDescription(review.id)}
+                                 className="text-gray-500 font-medium ml-1"
+                               >
+                                 menos
+                               </button>
+                             )}
+                           </>
+                         )}
                       </p>
                       {(review.comments_count || 0) > 0 && (
-                        <button 
+                        <button
                           onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }}
                           className="text-gray-500 text-xs mt-2 font-medium"
                         >
@@ -859,7 +1054,7 @@ export const Feed: React.FC = () => {
                    <div className="px-4 pb-5 pt-0">
                       <div className="text-sm font-bold text-dark mb-1">{review.likes_count || 0} curtidas</div>
                       {(review.comments_count || 0) > 0 && (
-                        <button 
+                        <button
                           onClick={() => { setActiveReviewId(review.id); setModalType('comments'); }}
                           className="text-gray-500 text-xs font-medium"
                         >

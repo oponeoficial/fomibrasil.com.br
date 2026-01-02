@@ -920,34 +920,57 @@ export const Profile: React.FC = () => {
                 <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
                   {/* Todas as listas (default primeiro) */}
                   {allDisplayLists.map((list) => (
-                    <div 
-                      key={list.id} 
-                      onClick={() => navigate(`/lists/${list.id}`)}
-                      className="relative w-40 shrink-0 aspect-[4/5] rounded-2xl overflow-hidden group bg-gray-200 cursor-pointer active:scale-95 transition-transform"
+                    <div
+                      key={list.id}
+                      className="relative w-40 shrink-0 aspect-[4/5] rounded-2xl overflow-hidden group bg-gray-200"
                     >
-                      <img 
-                        src={list.cover_photo_url || DEFAULT_RESTAURANT} 
-                        className="absolute inset-0 size-full object-cover" 
-                        alt={list.name}
-                        onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
-                      
+                      <div
+                        onClick={() => navigate(`/lists/${list.id}`)}
+                        className="absolute inset-0 cursor-pointer active:scale-95 transition-transform"
+                      >
+                        <img
+                          src={list.cover_photo_url || DEFAULT_RESTAURANT}
+                          className="absolute inset-0 size-full object-cover"
+                          alt={list.name}
+                          onError={(e) => { (e.target as HTMLImageElement).src = DEFAULT_RESTAURANT; }}
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
+                      </div>
+
                       {/* Badge para lista default */}
                       {list.is_default && (
-                        <div className="absolute top-2 left-2 bg-primary/90 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                        <div className="absolute top-2 left-2 bg-primary/90 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 pointer-events-none">
                           <span className="material-symbols-outlined text-[12px] filled">bookmark</span>
                           Quero ir
                         </div>
                       )}
-                      
+
+                      {/* Share button */}
+                      {!list.is_private && (
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const shareUrl = `${window.location.origin}/lists/${list.id}`;
+                            if (navigator.share) {
+                              try { await navigator.share({ title: list.name, url: shareUrl }); } catch {}
+                            } else {
+                              await navigator.clipboard.writeText(shareUrl);
+                              showToast("Link copiado!");
+                            }
+                          }}
+                          className="absolute top-2 right-2 size-7 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center shadow-md hover:bg-white transition-colors active:scale-95 z-10"
+                        >
+                          <span className="material-symbols-outlined text-[14px] text-dark">share</span>
+                        </button>
+                      )}
+
                       {list.is_private && !list.is_default && (
-                        <div className="absolute top-2 right-2 text-white/70">
+                        <div className="absolute top-2 right-2 text-white/70 pointer-events-none">
                           <span className="material-symbols-outlined text-sm">lock</span>
                         </div>
                       )}
-                      
-                      <div className="absolute bottom-4 left-4 right-4">
+
+                      <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
                         <div className="text-white font-bold text-lg leading-tight mb-1">
                           {list.is_default ? 'Quero ir' : list.name}
                         </div>

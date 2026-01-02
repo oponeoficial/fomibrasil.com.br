@@ -80,13 +80,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   return (
     <>
       {/* Backdrop */}
-      <div 
-        className={`fixed inset-0 bg-black/40 backdrop-blur-sm z-40 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      <div
+        className={`fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998] transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
       />
-      
+
       {/* Drawer */}
-      <div className={`fixed inset-y-0 left-0 w-[85%] max-w-xs bg-cream z-50 shadow-2xl transition-transform duration-300 ease-out transform ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className={`fixed inset-y-0 left-0 w-[85%] max-w-xs bg-cream z-[9999] shadow-2xl transition-transform duration-300 ease-out transform ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex flex-col h-full relative">
           
           {/* Header - Clicável para ir ao perfil */}
@@ -136,6 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
               <span className="material-symbols-outlined">policy</span>
               <span className="font-medium">Política de Privacidade</span>
             </button>
+
             <button onClick={handleLogoutClick} className="w-full flex items-center gap-4 px-5 h-14 rounded-full hover:bg-primary/10 text-primary">
               <span className="material-symbols-outlined">logout</span>
               <span className="font-medium">Sair</span>

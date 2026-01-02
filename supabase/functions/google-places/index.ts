@@ -17,19 +17,34 @@ const CITIES = [
   { name: "Olinda", state: "PE", lat: -7.9914, lng: -34.8416 },
   { name: "Jaboatão dos Guararapes", state: "PE", lat: -8.1128, lng: -35.0158 },
   { name: "Cabo de Santo Agostinho", state: "PE", lat: -8.2833, lng: -35.0333 },
-  { name: "Paulista", state: "PE", lat: -7.9406, lng: -34.8728 },
-  { name: "Camaragibe", state: "PE", lat: -8.0235, lng: -34.9817 },
-  { name: "São Lourenço da Mata", state: "PE", lat: -8.0020, lng: -35.0173 },
 ];
 
 const CUISINE_TYPES = [
   "restaurant",
-  "brazilian_restaurant", 
+  "brazilian_restaurant",
   "seafood_restaurant",
   "italian_restaurant",
   "japanese_restaurant",
   "steakhouse",
   "pizza_restaurant",
+  "mexican_restaurant",
+  "chinese_restaurant",
+  "thai_restaurant",
+  "indian_restaurant",
+  "french_restaurant",
+  "mediterranean_restaurant",
+  "vegetarian_restaurant",
+  "vegan_restaurant",
+  "hamburger_restaurant",
+  "sandwich_shop",
+  "sushi_restaurant",
+  "ramen_restaurant",
+  "barbecue_restaurant",
+  "brunch_restaurant",
+  "breakfast_restaurant",
+  "ice_cream_shop",
+  "dessert_shop",
+  "coffee_shop",
   "bar",
   "cafe",
   "bakery"
@@ -37,24 +52,83 @@ const CUISINE_TYPES = [
 
 // Tipos do Google que devem ser BLOQUEADOS
 const BLOCKED_GOOGLE_TYPES = [
-  "lodging", "hotel", "motel", "resort",
-  "supermarket", "grocery_or_supermarket", 
-  "university", "school", "secondary_school", "primary_school",
-  "hospital", "doctor", "pharmacy", "drugstore", "dentist", "health",
+  // Hospedagem
+  "lodging", "hotel", "motel", "resort", "campground", "rv_park",
+  // Supermercados e lojas
+  "supermarket", "grocery_or_supermarket", "convenience_store",
   "shopping_mall", "department_store",
   "store", "furniture_store", "home_goods_store", "hardware_store", "electronics_store",
+  "clothing_store", "shoe_store", "jewelry_store", "florist", "liquor_store",
+  // Educação
+  "university", "school", "secondary_school", "primary_school",
+  // Saúde
+  "hospital", "doctor", "pharmacy", "drugstore", "dentist", "health", "physiotherapist",
+  // Beleza e fitness
   "gym", "spa", "beauty_salon", "hair_care",
-  "church", "mosque", "synagogue", "hindu_temple", "place_of_worship",
-  "gas_station", "car_dealer", "car_repair", "car_wash",
+  // Religião
+  "church", "mosque", "synagogue", "hindu_temple", "place_of_worship", "cemetery", "funeral_home",
+  // Veículos
+  "gas_station", "car_dealer", "car_repair", "car_wash", "car_rental", "parking",
+  // Serviços
   "real_estate_agency", "insurance_agency", "travel_agency", "bank", "atm",
   "laundry", "storage", "moving_company", "painter", "plumber", "electrician",
+  "lawyer", "accounting", "locksmith", "roofing_contractor",
+  // Animais
   "veterinary_care", "pet_store", "zoo", "aquarium",
+  // Cultura e lazer (não restaurantes)
   "museum", "art_gallery", "library", "book_store",
-  "night_club", "casino"
+  "movie_theater", "stadium", "bowling_alley", "amusement_park",
+  "night_club", "casino",
+  // Transporte
+  "airport", "bus_station", "train_station", "subway_station", "transit_station",
+  // Governo
+  "city_hall", "courthouse", "embassy", "fire_station", "police", "post_office", "local_government_office"
 ];
 
-// Padrões de nome que devem ser BLOQUEADOS
-const BLOCKED_NAME_PATTERNS = /hotel|pousada|resort|bangalô|hostel|motel|faculdade|universidade|shopping|hospital|supermercado|mercado|atacadão|assaí|carrefour|extra|bompreço|pão de açúcar|sam.?s club|makro|hiper|embalagens|artesanato|distribuidora|atacado|loja|store|clínica|academia|igreja|templo|cartório|banco|lotérica|farmácia|drogaria|pet\s?shop|veterinár|salão|barbearia|estética|imobiliária|construtora|concessionária|posto|gasolina|oficina|funilaria|lavanderia|gráfica|papelaria|livraria|museu|teatro|cinema|boate|night\s?club/i;
+// Padrões de nome que devem ser BLOQUEADOS (case insensitive)
+const BLOCKED_NAME_PATTERNS = new RegExp([
+  // Hospedagem
+  "hotel", "pousada", "resort", "bangalô", "hostel", "motel", "flat\\b", "apart.?hotel",
+  // Educação
+  "faculdade", "universidade", "ufpe", "ufrpe", "unicap", "uninassau", "estácio", "unibra",
+  "colégio", "escola", "centro.?de.?ensino", "instituto", "senac", "senai", "sesi", "sesc",
+  // Comércio
+  "shopping", "supermercado", "mercado", "mercadinho", "mercearia",
+  "atacadão", "assaí", "carrefour", "extra", "bompreço", "pão.?de.?açúcar", "sam.?s.?club", "makro", "hiper",
+  "embalagens", "artesanato", "distribuidora", "atacado", "depósito",
+  "loja", "store", "outlet", "magazine",
+  // Saúde
+  "hospital", "clínica", "consultório", "laboratório", "diagnóstico", "pronto.?socorro", "upa\\b",
+  "farmácia", "drogaria", "droga.?raia", "pague.?menos",
+  // Fitness e beleza
+  "academia", "fitness", "crossfit", "pilates",
+  "salão", "barbearia", "estética", "spa\\b", "nail", "manicure",
+  // Religião
+  "igreja", "templo", "paróquia", "catedral", "capela", "centro.?espírita", "terreiro", "mesquita", "sinagoga",
+  // Serviços
+  "cartório", "banco", "lotérica", "caixa.?econômica", "bradesco", "itaú", "santander",
+  "imobiliária", "construtora", "incorporadora", "concessionária",
+  "posto", "gasolina", "combustível", "shell", "ipiranga", "br\\b",
+  "oficina", "funilaria", "mecânica", "auto.?center", "auto.?peças",
+  "lavanderia", "gráfica", "papelaria", "livraria", "copiadora",
+  "escritório", "coworking",
+  // Animais
+  "pet.?shop", "veterinár", "clínica.?vet",
+  // Eventos (NÃO restaurantes)
+  "buffet", "casa.?de.?festas", "espaço.?de.?eventos", "salão.?de.?festas", "casa.?de.?recepções",
+  "casa.?de.?shows", "eventos.?e.?buffet",
+  // Entretenimento
+  "museu", "teatro", "cinema", "boate", "night.?club", "balada", "club\\b",
+  "parque", "praça", "praia",
+  // Clubes e associações
+  "clube.?de", "associação", "sindicato", "maçonaria", "rotary", "lions",
+  // Governo
+  "prefeitura", "secretaria", "fórum", "tribunal", "câmara", "assembl[eé]ia",
+  // Transporte
+  "aeroporto", "rodoviária", "estação", "terminal",
+  // Específicos que aparecem errado
+  "recife.?antigo", "marco.?zero", "olinda.?históric"
+].join("|"), "i");
 
 // Função para verificar se deve bloquear o lugar
 function shouldBlockPlace(name: string, types: string[]): boolean {
@@ -183,8 +257,9 @@ async function bulkSeed(supabase: any): Promise<{ inserted: number; skipped: num
         if (nearbyData.status !== "OK") continue;
 
         for (const place of nearbyData.results || []) {
+          // Filtros de qualidade: nota >= 4.0 E pelo menos 9 avaliações
           if ((place.rating || 0) < 4.0) continue;
-          if ((place.user_ratings_total || 0) < 10) continue;
+          if ((place.user_ratings_total || 0) < 9) continue;
           
           if (processedIds.has(place.place_id)) continue;
           processedIds.add(place.place_id);
@@ -269,7 +344,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { action, query, location, place_id } = await req.json();
+    const { action, query, location, place_id, restaurant_id, photo_url, google_place_id: newPlaceId, city_index } = await req.json();
 
     if (!GOOGLE_API_KEY) {
       throw new Error("GOOGLE_PLACES_API_KEY not configured");
@@ -281,6 +356,102 @@ serve(async (req: Request) => {
       case "bulk_seed": {
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
         result = await bulkSeed(supabase);
+        break;
+      }
+
+      // Seed uma cidade específica (para evitar timeout)
+      case "seed_city": {
+        const cityIdx = city_index ?? 0;
+
+        if (cityIdx < 0 || cityIdx >= CITIES.length) {
+          throw new Error(`city_index deve ser entre 0 e ${CITIES.length - 1}`);
+        }
+
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const city = CITIES[cityIdx];
+
+        const results = { inserted: 0, skipped: 0, blocked: 0, errors: [] as string[], city: city.name };
+
+        const { data: existingPlaces } = await supabase
+          .from("restaurants")
+          .select("google_place_id");
+
+        const existingIds = new Set(
+          (existingPlaces || []).map((p: any) => p.google_place_id).filter(Boolean)
+        );
+
+        const processedIds = new Set<string>();
+
+        console.log(`🔍 Buscando restaurantes em ${city.name}...`);
+
+        for (const type of CUISINE_TYPES) {
+          try {
+            const nearbyData = await searchNearby(city.lat, city.lng, type);
+            if (nearbyData.status !== "OK") continue;
+
+            for (const place of nearbyData.results || []) {
+              if ((place.rating || 0) < 4.0) continue;
+              if ((place.user_ratings_total || 0) < 9) continue;
+
+              if (processedIds.has(place.place_id)) continue;
+              processedIds.add(place.place_id);
+
+              if (existingIds.has(place.place_id)) {
+                results.skipped++;
+                continue;
+              }
+
+              const details = await getPlaceDetails(place.place_id);
+              if (!details) continue;
+
+              if (shouldBlockPlace(details.name, details.types || [])) {
+                console.log(`🚫 BLOQUEADO: ${details.name}`);
+                results.blocked++;
+                continue;
+              }
+
+              const { city: extractedCity, neighborhood } = extractLocation(details.address_components);
+              const cuisineTypes = mapCuisineTypes(details.types || []);
+              const openingHours = details.opening_hours?.weekday_text || null;
+              const isOpenNow = details.current_opening_hours?.open_now ?? details.opening_hours?.open_now ?? null;
+
+              const { error } = await supabase.from("restaurants").insert({
+                google_place_id: details.place_id,
+                name: details.name,
+                address: details.formatted_address,
+                city: extractedCity || city.name,
+                neighborhood: neighborhood || null,
+                latitude: details.geometry?.location?.lat,
+                longitude: details.geometry?.location?.lng,
+                phone: details.formatted_phone_number || null,
+                website: details.website || null,
+                google_maps_url: details.url,
+                photo_url: details.photos?.[0] ? getPhotoUrl(details.photos[0].photo_reference) : null,
+                cuisine_types: cuisineTypes.length > 0 ? cuisineTypes : ["Restaurante"],
+                price_level: details.price_level || null,
+                opening_hours: openingHours,
+                is_open_now: isOpenNow,
+                is_active: true
+              });
+
+              if (error) {
+                results.errors.push(`${details.name}: ${error.message}`);
+              } else {
+                results.inserted++;
+                existingIds.add(details.place_id);
+                console.log(`✅ NOVO: ${details.name}`);
+              }
+
+              await new Promise(r => setTimeout(r, 50));
+            }
+            await new Promise(r => setTimeout(r, 100));
+          } catch (err) {
+            results.errors.push(`${type}: ${(err as Error).message}`);
+          }
+        }
+
+        console.log(`📊 ${city.name}: ${results.inserted} inseridos, ${results.skipped} já existiam, ${results.blocked} bloqueados`);
+        result = results;
         break;
       }
 
@@ -332,8 +503,34 @@ serve(async (req: Request) => {
         break;
       }
 
+      // Atualizar foto de um restaurante (usa service role para bypass RLS)
+      case "update_photo": {
+        if (!restaurant_id) throw new Error("restaurant_id is required");
+        if (!photo_url) throw new Error("photo_url is required");
+
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+        const updateData: Record<string, any> = {
+          photo_url,
+          updated_at: new Date().toISOString()
+        };
+        if (newPlaceId) {
+          updateData.google_place_id = newPlaceId;
+        }
+
+        const { error } = await supabase
+          .from("restaurants")
+          .update(updateData)
+          .eq("id", restaurant_id);
+
+        if (error) throw error;
+
+        result = { updated: true, restaurant_id };
+        break;
+      }
+
       default:
-        throw new Error("Invalid action. Use: bulk_seed, search, or details");
+        throw new Error("Invalid action. Use: bulk_seed, search, details, or update_photo");
     }
 
     return new Response(
